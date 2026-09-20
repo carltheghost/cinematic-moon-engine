@@ -1,0 +1,23 @@
+{
+  "format": "cme-replay/1",
+  "name": "replay-seed7-ch1-390x844-cinematic-rmon",
+  "seed": 7,
+  "viewport": {
+    "w": 390,
+    "h": 844
+  },
+  "tierParam": "cinematic",
+  "resolvedTier": "still",
+  "tierMode": "forced-still",
+  "reducedMotion": true,
+  "canonicalScrollT": 0,
+  "chapter": 1,
+  "canonicalChapterT": 0,
+  "motionChapterT": 0,
+  "engineVersion": "fdc10e1ce5866cb2e1853ef4c5f4a03a6d0a6fb6",
+  "pixelSha256": "61374686d2694385332213784b3bb8b2db73b42c84944633e64e7335a2ca4108",
+  "pixels": {
+    "width": 390,
+    "height": 844
+  }
+}

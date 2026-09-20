@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Eclipse Act — Cinematic Moon Engine (Phase 6 second-scene probe)</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #030507; }
+  #app { position: fixed; inset: 0; z-index: 1; }
+  /* Scroll-driven chapter clock: 13 chapters × 100vh behind the fixed canvas
+   * (same scroll geometry as the main scene — the presentation coordinate
+   * set bakes CHAPTER_COUNT=13; see docs/second-scene-probe.md). */
+  #scroll-space { position: relative; z-index: 0; height: 1300vh; }
+  canvas { display: block; }
+  #loader {
+    position: fixed; inset: 0; z-index: 10;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; background: #030507; color: #cfd8e3;
+    font: 13px/1.5 system-ui, sans-serif; letter-spacing: 0.18em;
+  }
+  #loader .ring {
+    width: 54px; height: 54px; border-radius: 50%;
+    border: 2px solid #2a3542; border-top-color: #e0552b;
+    animation: spin 1s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<div id="scroll-space" aria-hidden="true"></div>
+<div id="app"></div>
+<div id="loader" role="status" aria-label="Baking moon"><div class="ring"></div><div>BAKING MOON</div></div>
+<script type="importmap">
+{
+  "imports": {
+    "three": "../../vendor/three/three.module.js",
+    "three/addons/": "../../vendor/three/addons/",
+    "postprocessing": "../../vendor/postprocessing/index.js"
+  }
+}
+</script>
+<script type="module">
+/* Eclipse-act driver (Phase 6 second-scene feasibility probe).
+ *
+ * HOST-SIDE driver — not an engine edit. It wires the engine's public module
+ * API to a second scene whose content lives entirely in eclipse-config.js:
+ *   - createCamera({ chapters: ECLIPSE_CHAPTERS })  (chapter injection)
+ *   - moon.setEclipse(1)                            (blood-moon shift)
+ *   - env.setChapterEnv({...explicit values...})    (ember grade)
+ *   - post.setGrade(emberTintedLUT)                 (ember grade LUT)
+ *   - canonicalPresentation()                       (the frozen 13-chapter clock)
+ *
+ * Deliberately minimal vs index.html: manual tier only (no warmup/watchdog),
+ * no loader-budget fallback beyond the 1024² re-bake. The tier ladder and
+ * determinism machinery belong to the main scene; this probe proves the
+ * engine renders a second act through its public API.
+ */
+import * as THREE from 'three';
+import { Rng, TIER_TABLE } from '../../engine/seed.js';
+import * as skym from '../../engine/sky.js';
+import * as starm from '../../engine/stars.js';
+import * as postm from '../../engine/post.js';
+import * as moonm from '../../engine/moon.js';
+import * as envm from '../../engine/environment.js';
+import { createCamera } from '../../engine/camera.js';
+import { canonicalPresentation } from '../../engine/presentation.js';
+import { resolveTier } from '../../engine/tiermanager.js';
+import { ECLIPSE_CHAPTERS, ECLIPSE_META, emberGradeTint } from './eclipse-config.js';
+
+const params = new URLSearchParams(location.search);
+const SEED = parseInt(params.get('seed') || '7', 10);
+const TIER_PARAM = params.get('tier');
+const AUTOPLAY = params.get('autoplay') === '1';
+let autoplayY = 0;
+
+const MOON_AZ = 0.35, MOON_EL = 0.16, MOON_DIST = 1000, MOON_R = 151;
+
+function azElToDir(az, el) {
+  const ce = Math.cos(el);
+  return new THREE.Vector3(ce * Math.cos(az), Math.sin(el), ce * Math.sin(az));
+}
+
+const app = document.getElementById('app');
+const loaderEl = document.getElementById('loader');
+const bootLog = [];
+function pushLog(msg) { bootLog.push(msg); console.log('[eclipse]', msg); }
+
+window.__cmeLoaderSeen = true;
+await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.setPixelRatio(1);
+renderer.setSize(innerWidth, innerHeight);
+renderer.toneMapping = THREE.NoToneMapping;
+app.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 1, 8000);
+
+const isMobile = (window.matchMedia && matchMedia('(pointer: coarse)').matches) || innerWidth < 768;
+const reducedMotion = (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches) || false;
+
+/* Manual tier only in this driver (the main scene owns the ladder). */
+const tierResolution = resolveTier({ tierParam: TIER_PARAM, reducedMotion });
+const TIER = tierResolution.tier;
+const tierCfg = TIER_TABLE[TIER];
+pushLog(`tier: ${TIER} (mode=${tierResolution.mode}) — ${tierResolution.reason}`);
+
+const rng = new Rng(SEED);
+let moon = moonm.buildMoon(rng, { resolution: 2048, seed: SEED, chapter: 3, radius: MOON_R });
+pushLog(`bake: 2048² hashAlbedo=${moon.hashAlbedo} hashNormal=${moon.hashNormal}`);
+
+/* Blood moon for the whole act — the Phase 6 engine hook (moon.js setEclipse).
+ * Persists across setChapter() calls (applyChapter never touches uEclipse). */
+moon.setEclipse(ECLIPSE_META.eclipseAmount);
+pushLog(`eclipse: uEclipse=${moon.eclipse}`);
+
+const moonDir = azElToDir(MOON_AZ, MOON_EL);
+moon.group.position.copy(moonDir).multiplyScalar(MOON_DIST);
+moon.sphere.lookAt(camera.position);
+{
+  const sunDir = moonDir.clone().negate();
+  const up = new THREE.Vector3(0, 1, 0);
+  const side = new THREE.Vector3().crossVectors(sunDir, up).normalize();
+  const up2 = new THREE.Vector3().crossVectors(side, sunDir).normalize();
+  sunDir.applyAxisAngle(side, -0.20).applyAxisAngle(up2, 0.16).normalize();
+  moon.setSunDirection(sunDir);
+}
+moon.setMeshMode(tierCfg.moonMesh === 'sphere' ? 'sphere' : 'disc');
+scene.add(moon.group);
+
+const sky = skym.buildSky(rng);
+sky.setMoonDirection(MOON_AZ, MOON_EL);
+scene.add(sky.mesh);
+scene.fog = sky.fog;
+const stars = starm.buildStars(new Rng(SEED ^ 0x51ed), TIER);
+stars.setMoonPosition(moonDir.clone());
+scene.add(stars.points);
+
+const env = envm.buildEnvironment(new Rng((SEED ^ 0xe117) >>> 0), {
+  sky, seed: SEED, moonAzimuth: MOON_AZ, moonElevation: MOON_EL, tier: TIER,
+});
+scene.add(env.group);
+pushLog(`env: built (seed=${SEED} tier=${TIER} trees=${env.counts.trees} embers=${env.counts.embers})`);
+
+const post = postm.buildPost(renderer, scene, camera, { tier: TIER, seed: SEED, reducedMotion });
+
+/* Ember grade: tint the neutral 3D LUT with the config's pure tint function,
+ * swap it in via the public setGrade(). */
+{
+  const lut = postm.generateNeutralLUT(16);
+  const d = lut.image.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [r, g, b] = emberGradeTint(d[i] / 255, d[i + 1] / 255, d[i + 2] / 255);
+    d[i] = Math.round(r * 255); d[i + 1] = Math.round(g * 255); d[i + 2] = Math.round(b * 255);
+  }
+  lut.needsUpdate = true;
+  post.setGrade(lut);
+  pushLog('grade: ember-tinted LUT via post.setGrade()');
+}
+
+/* The camera IS injectable: createCamera({ chapters }) is the public seam. */
+const cameraCtl = createCamera({ chapters: ECLIPSE_CHAPTERS });
+
+/* Chapter sampling over the eclipse config — the same interpolation model
+ * the engine uses (smoothstep between adjacent keyframes). String-valued
+ * heroSlots comes from the nearest chapter. Host-side: the config is data. */
+function smoothstep01(x) { const t = Math.min(1, Math.max(0, x)); return t * t * (3 - 2 * t); }
+function sampleEclipse(chapterT) {
+  const n = ECLIPSE_CHAPTERS.length;
+  const t = Math.min(n - 1, Math.max(0, chapterT));
+  const i = Math.min(n - 2, Math.floor(t));
+  const f = smoothstep01(t - i);
+  const A = ECLIPSE_CHAPTERS[i], B = ECLIPSE_CHAPTERS[i + 1];
+  const L = (a, b) => a + (b - a) * f;
+  const near = (t - i) < 0.5 ? A : B;
+  return {
+    fogDensity: L(A.fogDensity, B.fogDensity),
+    ember: {
+      density: L(A.ember.density, B.ember.density),
+      opacity: L(A.ember.opacity, B.ember.opacity),
+      drift: L(A.ember.drift, B.ember.drift),
+      warmth: L(A.ember.warmth, B.ember.warmth),
+    },
+    lantern: {
+      heroIntensity: L(A.lantern.heroIntensity, B.lantern.heroIntensity),
+      poolIntensity: L(A.lantern.poolIntensity, B.lantern.poolIntensity),
+      poolVisibility: L(A.lantern.poolVisibility, B.lantern.poolVisibility),
+      heroSlots: near.lantern.heroSlots,
+    },
+    glint: L(A.glint, B.glint),
+    exposure: L(A.exposure, B.exposure),
+    eclipse: L(A.eclipse, B.eclipse),
+  };
+}
+
+let scrollOverride = null;
+function maxScrollY() { return document.documentElement.scrollHeight - window.innerHeight; }
+
+function applyScrollState(scrollY) {
+  const pres = canonicalPresentation({ scrollY, maxScroll: maxScrollY(), reducedMotion });
+  const cam = cameraCtl.evaluateAt(pres.motionChapterT);
+  camera.position.set(cam.position.x, cam.position.y, cam.position.z);
+  camera.lookAt(cam.lookTarget.x, cam.lookTarget.y, cam.lookTarget.z);
+  camera.fov = cam.fov;
+  camera.updateProjectionMatrix();
+  camera.updateMatrixWorld();
+  const cfg = sampleEclipse(pres.motionChapterT);
+  moon.setChapter(pres.motionChapterT);
+  moon.setEclipse(cfg.eclipse);
+  const V = Math.exp(-Math.pow(400 * cfg.fogDensity, 2)); // same formula as the main scene
+  env.setChapterEnv({
+    fogDensity: cfg.fogDensity,
+    ember: cfg.ember,
+    lantern: cfg.lantern,
+    glint: { peak: V * cfg.glint, width: 1 + 2.5 * (1 - V), contrast: 0.4 + 0.6 * V },
+  });
+  env.setTime(pres.motionSimTime);
+  stars.setTime(pres.motionSimTime);
+  post.setExposure(cfg.exposure);
+  return { ...cam, presentation: pres };
+}
+
+function currentScrollY() { return scrollOverride !== null ? scrollOverride : window.scrollY; }
+
+function moonScreen() { return moon.projectedDisc(camera, innerWidth, innerHeight); }
+function wireMoonMask() {
+  const pr = moonScreen();
+  post.setMoonMask({ x: pr.x / innerWidth, y: 1 - pr.y / innerHeight }, pr.rPx * renderer.getPixelRatio());
+  return pr;
+}
+
+function readPixels() {
+  const gl = renderer.getContext();
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const w = renderer.domElement.width, h = renderer.domElement.height;
+  const raw = new Uint8Array(w * h * 4);
+  gl.readPixels(0, 0, w, h, gl.RGBA, gl.UNSIGNED_BYTE, raw);
+  const out = new Uint8Array(w * h * 4);
+  for (let y = 0; y < h; y++) out.set(raw.subarray(y * w * 4, (y + 1) * w * 4), (h - 1 - y) * w * 4);
+  return { width: w, height: h, data: Array.from(out) };
+}
+
+function renderFrame(t = 0) {
+  scrollOverride = (Math.max(0, Math.min(312, t)) / 312) * maxScrollY();
+  const cam = applyScrollState(scrollOverride);
+  wireMoonMask();
+  post.render(cam.presentation.frame);
+  return readPixels();
+}
+
+function renderAtScrollY(scrollY) {
+  scrollOverride = Math.min(maxScrollY(), Math.max(0, scrollY));
+  const cam = applyScrollState(scrollOverride);
+  wireMoonMask();
+  post.render(cam.presentation.frame);
+  return { pixels: readPixels(), state: cam };
+}
+
+window.__eclipse = {
+  THREE, renderer, scene, camera, sky, stars, post, postm, moon, env,
+  tier: TIER, tierCfg,
+  renderFrame, renderAtScrollY, readPixels, moonScreen,
+  sampleEclipse, cameraCtl,
+  config: ECLIPSE_META,
+  bootLog,
+};
+window.__eclipseBoot = true;
+window.__cmeBootError = null;
+
+function onResize() {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  post.setSize(window.innerWidth, window.innerHeight);
+}
+window.addEventListener('resize', onResize);
+onResize();
+
+{
+  const cam = applyScrollState(0);
+  wireMoonMask();
+  post.render(cam.presentation.frame);
+}
+loaderEl.style.display = 'none';
+pushLog('boot: eclipse act first frame rendered');
+
+let lastFrameT = 0, paused = false, rafId = 0;
+function loop() {
+  rafId = requestAnimationFrame(loop);
+  if (paused) return;
+  const now = performance.now();
+  lastFrameT = now;
+  let y = currentScrollY();
+  if (AUTOPLAY) {
+    autoplayY += 2;
+    if (autoplayY > maxScrollY()) autoplayY = 0;
+    y = autoplayY;
+  }
+  const cam = applyScrollState(y);
+  wireMoonMask();
+  post.render(cam.presentation.frame);
+}
+rafId = requestAnimationFrame(loop);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { paused = true; cancelAnimationFrame(rafId); }
+  else { paused = false; rafId = requestAnimationFrame(loop); }
+});
+</script>
+</body>
+</html>

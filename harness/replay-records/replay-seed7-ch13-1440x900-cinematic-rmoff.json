@@ -1,0 +1,23 @@
+{
+  "format": "cme-replay/1",
+  "name": "replay-seed7-ch13-1440x900-cinematic-rmoff",
+  "seed": 7,
+  "viewport": {
+    "w": 1440,
+    "h": 900
+  },
+  "tierParam": "cinematic",
+  "resolvedTier": "cinematic",
+  "tierMode": "manual",
+  "reducedMotion": false,
+  "canonicalScrollT": 312,
+  "chapter": 13,
+  "canonicalChapterT": 12,
+  "motionChapterT": 12,
+  "engineVersion": "fdc10e1ce5866cb2e1853ef4c5f4a03a6d0a6fb6",
+  "pixelSha256": "e7cb195cf26f833b12e3a89b80458ea9e4edb0eb3fcb4ea4393c044182a851ee",
+  "pixels": {
+    "width": 1440,
+    "height": 900
+  }
+}
