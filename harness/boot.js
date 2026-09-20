@@ -27,13 +27,17 @@ async function launchBrowser() {
 /**
  * Boot a harness page.
  * opts: { tier, seed, emberfloor, reducedMotion, autoplay, extraQuery,
- *         pageFile (default 'index.html'), bootFlag (default '__cmeBoot') }
+ *         pageFile (default 'index.html'), bootFlag (default '__cmeBoot'),
+ *         bakeRes (0 = unset → production bake-budget behavior; 2048 pins the
+ *         seeded moon bake and disables the wall-clock fallback — REQUIRED
+ *         for any boot that asserts pixel identity, see index.html) }
  * Returns { page, errors, bootOk } — bootOk requires zero console errors.
  */
 async function bootPage(browser, w, h, opts = {}) {
   const {
     tier = 'cinematic', seed = '7', emberfloor = false, reducedMotion = false,
     autoplay = false, extraQuery = '', pageFile = 'index.html', bootFlag = '__cmeBoot',
+    bakeRes = 0,
   } = opts;
   const page = await browser.newPage({ viewport: { width: w, height: h } });
   if (reducedMotion) await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -44,6 +48,7 @@ async function bootPage(browser, w, h, opts = {}) {
     `?seed=${seed}&tier=${tier}`;
   if (emberfloor) url += '&emberfloor=1';
   if (autoplay) url += '&autoplay=1';
+  if (bakeRes) url += `&bakeRes=${bakeRes}`;
   if (extraQuery) url += extraQuery;
   await page.goto(url, { waitUntil: 'load', timeout: 60000 });
   await page.waitForFunction(`window.${bootFlag} === true`, null, { timeout: 90000 }).catch(() => {});

@@ -51,6 +51,10 @@
  * bake. Timing is measured HERE (host side — engine/ must not touch clocks,
  * per the grep gate). On breach: dispose the 2048² textures, re-bake at
  * 1024², log the fallback. Either way the moon is real before first frame.
+ * Determinism note (Phase 7): the budget fallback is wall-clock-dependent,
+ * so the same URL can bake at 2048² or 1024² depending on machine load —
+ * different pixels. Harness boots that assert pixel identity pin
+ * ?bakeRes=2048 (disables the fallback; unset = production behavior above).
  */
 import * as THREE from 'three';
 import { Rng, TIER_TABLE } from './engine/seed.js';
@@ -62,6 +66,13 @@ import * as envm from './engine/environment.js';
 import * as chaptersm from './engine/chapters.js';
 import { createCamera } from './engine/camera.js';
 import { canonicalPresentation } from './engine/presentation.js';
+/* Phase 7: scene registry — the explicit extension mechanism for second
+ * scenes (engine/scene.js). ?scene=<id> selects the scene config
+ * (default: the canonical Mimas scene); scenes/scene-index.js registers
+ * the built-in loaders. This is a loader seam, not content management
+ * (FINAL-PLAN §8 stays out of scope). */
+import { loadScene } from './engine/scene.js';
+import './scenes/scene-index.js';
 import {
   resolveTier, selectTierFromWarmup, stepDown, createWatchdog,
   BLOOM_VISUAL_BAKEOFF,
@@ -90,6 +101,14 @@ let autoplayY = 0;
 const BENCHMARK = params.get('benchmark') === '1';
 const BENCH_FRAMES = 240;
 let benchDts = BENCHMARK ? [] : null;
+/* Bake-resolution pin (harness-only, Phase 7): ?bakeRes=2048 forces the
+ * seeded moon bake to that resolution and DISABLES the wall-clock budget
+ * fallback below. Unset (0) → production behavior byte-identical: 2048²
+ * attempt with the 1500 ms desktop / 3000 ms mobile budget and 1024²
+ * re-bake on breach. The budget fallback is wall-clock-dependent (VM load),
+ * so harness boots that assert pixel identity MUST pin ?bakeRes=2048 —
+ * otherwise the same URL can render different pixels run to run. */
+const BAKE_RES_PIN = parseInt(params.get('bakeRes') || '0', 10) || 0;
 /* TIER/tierCfg are resolved after reducedMotion is known (below) — Phase 5. */
 
 /* Hero frame constants (also recorded in harness/hero-frame.json). */
@@ -107,6 +126,24 @@ const loaderEl = document.getElementById('loader');
 const loaderSub = document.getElementById('loader-sub');
 const bootLog = [];
 function pushLog(msg) { bootLog.push(msg); console.log('[cme]', msg); }
+
+/* Phase 7: resolve the scene config BEFORE any engine module is built.
+ * Unknown ids fail LOUDLY (loader shows the error, boot flag never sets) —
+ * a typo'd ?scene= must never silently masquerade as the canonical scene. */
+const SCENE_ID = params.get('scene') || 'mimas';
+let sceneCfg;
+try {
+  sceneCfg = await loadScene(SCENE_ID);
+} catch (err) {
+  loaderSub.textContent = `scene error: ${err.message}`;
+  window.__cmeBootError = `scene: ${err.message}`;
+  console.error('[cme]', err.message);
+  throw err;
+}
+pushLog(`scene: ${sceneCfg.id} — ${sceneCfg.title}`);
+/* The scroll-space height is scene config (chapters × 100vh); the canonical
+ * scene's 1300vh keeps the layout byte-identical to pre-Phase-7. */
+document.getElementById('scroll-space').style.height = `${sceneCfg.scrollSpaceVh}vh`;
 
 /* Loader must be painted BEFORE the (synchronous, heavy) bake starts. */
 window.__cmeLoaderSeen = true;
@@ -143,24 +180,32 @@ const TIER_MODE = tierResolution.mode; // 'forced-still' | 'manual' | 'auto'
 pushLog(`tier: ${TIER} (mode=${TIER_MODE}) — ${tierResolution.reason}`);
 const budgetMs = isMobile ? 3000 : 1500; // desktop 1.5 s, mobile 3 s
 const rng = new Rng(SEED);
+/* Phase 7: colorScript comes from the scene config (null → the Phase-4-frozen
+ * COLOR_SCRIPT default — the canonical scene is pixel-identical). */
 let moon, bakeMs, resolution = 2048, fallback = null;
 {
+  /* Phase 7: ?bakeRes= pins the bake resolution (harness determinism) and
+   * disables the wall-clock budget fallback. Unset → production behavior:
+   * 2048² attempt with budget fallback to 1024², byte-identical to before. */
+  const targetRes = BAKE_RES_PIN > 0 ? BAKE_RES_PIN : 2048;
   const t0 = performance.now();
-  moon = moonm.buildMoon(rng, { resolution: 2048, seed: SEED, chapter: 3, radius: MOON_R });
+  moon = moonm.buildMoon(rng, { resolution: targetRes, seed: SEED, chapter: 3, radius: MOON_R, colorScript: sceneCfg.colorScript });
   bakeMs = performance.now() - t0;
-  if (bakeMs > budgetMs) {
+  resolution = targetRes;
+  if (!BAKE_RES_PIN && bakeMs > budgetMs) {
     pushLog(`bake: 2048² took ${bakeMs.toFixed(0)} ms > budget ${budgetMs} ms — disposing, re-baking at 1024²`);
     moon.dispose();
     fallback = { from: 2048, to: 1024, bakeMs2048: bakeMs, budgetMs };
     loaderSub.textContent = 'budget exceeded — re-baking at 1024²';
     const t1 = performance.now();
-    moon = moonm.buildMoon(new Rng(SEED), { resolution: 1024, seed: SEED, chapter: 3, radius: MOON_R });
+    moon = moonm.buildMoon(new Rng(SEED), { resolution: 1024, seed: SEED, chapter: 3, radius: MOON_R, colorScript: sceneCfg.colorScript });
     bakeMs = performance.now() - t1;
     resolution = 1024;
     pushLog(`bake: 1024² fallback took ${bakeMs.toFixed(0)} ms`);
   }
-  pushLog(`bake: ${resolution}² in ${bakeMs.toFixed(0)} ms (budget ${budgetMs} ms) ` +
-    `hashAlbedo=${moon.hashAlbedo} hashNormal=${moon.hashNormal} craters=${moon.bake.craterCount}`);
+  pushLog(`bake: ${resolution}² in ${bakeMs.toFixed(0)} ms` +
+    (BAKE_RES_PIN ? ` (pinned via ?bakeRes=${BAKE_RES_PIN}, budget fallback disabled)` : ` (budget ${budgetMs} ms)`) +
+    ` hashAlbedo=${moon.hashAlbedo} hashNormal=${moon.hashNormal} craters=${moon.bake.craterCount}`);
 }
 
 /* Moon placement + sun.
@@ -209,6 +254,18 @@ pushLog(`env: terrain+water+scatter built (seed=${SEED} tier=${TIER} ` +
 /* Post pipeline (Phase 1): RenderPass → bloom → grade. */
 const post = postm.buildPost(renderer, scene, camera, { tier: TIER, seed: SEED, reducedMotion });
 
+/* Phase 7: scene CONTENT hook — runs once at boot after the engine modules
+ * are built. Scene-specific wiring (blood-moon hooks, grade LUTs) lives in
+ * the scene config's decorate(), not in this host page. Null for the
+ * canonical scene (no-op). */
+if (sceneCfg.decorate) {
+  sceneCfg.decorate({
+    moon, env, post, postm, camera, scene, renderer, THREE,
+    seed: SEED, config: sceneCfg,
+  });
+  pushLog(`scene: decorate() applied for "${sceneCfg.id}"`);
+}
+
 /* --- Deterministic scroll-driven chapter clock (Phase 4b, Phase 5 coords). ---
  * Render state is a PURE function of scroll position: the ONLY clock is the
  * canonical presentation coordinate set from engine/presentation.js —
@@ -217,7 +274,12 @@ const post = postm.buildPost(renderer, scene, camera, { tier: TIER, seed: SEED, 
  * Under reduced motion, motion* coordinates are the quantized stepped stills;
  * EVERY motion-producing subsystem (camera, moon, environment, post) consumes
  * them — no continuous post animation while the camera is stepped (GPT Q7). */
-const cameraCtl = createCamera();
+/* Phase 7: chapters + chapterLocator come from the scene config (nulls →
+ * the frozen canonical defaults — pixel-identical for the Mimas scene). */
+const cameraCtl = createCamera({
+  chapters: sceneCfg.chapters,
+  chapterLocator: sceneCfg.chapterLocator ?? undefined,
+});
 let scrollOverride = null; // harness-only: renderFrame/setScrollP write here
 
 function maxScrollY() {
@@ -231,7 +293,11 @@ function maxScrollY() {
  * ({...cam, presentation}).
  */
 function applyScrollState(scrollY) {
-  const pres = canonicalPresentation({ scrollY, maxScroll: maxScrollY(), reducedMotion });
+  /* Phase 7: the clock is scene config (defaults 13/312 = frozen canonical). */
+  const pres = canonicalPresentation({
+    scrollY, maxScroll: maxScrollY(), reducedMotion,
+    chapterCount: sceneCfg.chapterCount, simDuration: sceneCfg.simDuration,
+  });
   const cam = cameraCtl.evaluateAt(pres.motionChapterT);
   camera.position.set(cam.position.x, cam.position.y, cam.position.z);
   camera.lookAt(cam.lookTarget.x, cam.lookTarget.y, cam.lookTarget.z);
@@ -241,7 +307,8 @@ function applyScrollState(scrollY) {
   // reads it via Vector3.project(), and the renderer only refreshes it
   // during render — without this the mask lags one frame behind the pose.
   camera.updateMatrixWorld();
-  const ch = chaptersm.sampleChapter(pres.motionChapterT);
+  /* Phase 7: chapter sampling is scene config (same interpolation model). */
+  const ch = chaptersm.sampleChapterFrom(sceneCfg.chapters, pres.motionChapterT);
   moon.setChapter(pres.motionChapterT);
   const V = Math.exp(-Math.pow(400 * ch.fogDensity, 2)); // atmospheric transmission, dRef=400 — same formula as env docs
   env.setChapterEnv({
@@ -274,15 +341,17 @@ function wireMoonMask() {
 }
 
 /**
- * Deterministic harness entry — PURE in t (sim-seconds ∈ [0, 312]):
- * same t → same scrollY → same pixels. scrollOverride stays set; the live
+ * Deterministic harness entry — PURE in t (sim-seconds ∈ [0, simDuration],
+ * 312 for the canonical scene): same t → same scrollY → same pixels. scrollOverride stays set; the live
  * loop then renders that state (acceptable and deterministic). Under reduced
  * motion the presentation layer quantizes to stepped stills (see
  * engine/presentation.js); the canonical coordinates remain inspectable on
  * the returned state.
  */
 function renderFrame(t = 0) {
-  scrollOverride = (Math.max(0, Math.min(312, t)) / 312) * maxScrollY();
+  /* Phase 7: the sim-duration bound is scene config (312 canonical). */
+  const simDur = sceneCfg.simDuration;
+  scrollOverride = (Math.max(0, Math.min(simDur, t)) / simDur) * maxScrollY();
   const cam = applyScrollState(scrollOverride);
   wireMoonMask();
   post.render(cam.presentation.frame);
@@ -408,7 +477,13 @@ window.__cme = {
   // Phase 4b: deterministic chapter clock hooks
   setScrollP, clearScrollOverride, applyScrollState,
   chapters: chaptersm, cameraCtl, sampleChapter: chaptersm.sampleChapter,
-  SIM_DURATION: chaptersm.SIM_DURATION,
+  sampleChapterFrom: chaptersm.sampleChapterFrom, // Phase 7: scene-parameterized sampler
+  createCamera, // Phase 7: exposed for harness locator-injection checks
+  SIM_DURATION: sceneCfg.simDuration, // Phase 7: scene clock (312 canonical)
+  scene: sceneCfg.id, // Phase 7: the active scene id (?scene=)
+  sceneConfig: sceneCfg, // Phase 7: the resolved scene config
+  bakeResPin: BAKE_RES_PIN, // Phase 7: ?bakeRes= pin (0 = production budget behavior)
+  get bakeResolution() { return resolution; }, // Phase 7: actual bake res (2048 or 1024 fallback)
 };
 
 /* Boot flags for the harness. */

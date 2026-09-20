@@ -1,11 +1,16 @@
 {
-  "format": "cme-replay/1",
+  "format": "cme-replay/3",
   "name": "replay-seed7-ch13-1440x900-cinematic-rmoff",
   "seed": 7,
   "viewport": {
     "w": 1440,
-    "h": 900
+    "h": 900,
+    "dpr": 1
   },
+  "scene": "mimas",
+  "chapterCount": 13,
+  "simDuration": 312,
+  "bakeRes": 2048,
   "tierParam": "cinematic",
   "resolvedTier": "cinematic",
   "tierMode": "manual",
@@ -14,7 +19,7 @@
   "chapter": 13,
   "canonicalChapterT": 12,
   "motionChapterT": 12,
-  "engineVersion": "fdc10e1ce5866cb2e1853ef4c5f4a03a6d0a6fb6",
+  "engineVersion": "b4946e980f5ac7cddfb23cf3a28713d90d5e8838",
   "pixelSha256": "e7cb195cf26f833b12e3a89b80458ea9e4edb0eb3fcb4ea4393c044182a851ee",
   "pixels": {
     "width": 1440,

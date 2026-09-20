@@ -15,8 +15,20 @@
  * (uEclipse=1 throughout), the ember grade runs hot (warmth 0.75–1.0), and
  * the lanterns burn vermilion against the dimmed disc.
  *
- * Field semantics mirror engine/chapters.js (same interpolation model:
- * smoothstep between adjacent keyframes, applied by the driver).
+ * Field semantics mirror engine/chapters.js (the engine's interpolation
+ * model: sampleChapterFrom lerps numeric fields between adjacent keyframes;
+ * the driver and the main page both consume it — one mechanism).
+ *
+ * PHASE 7: this module is also a registered SCENE (engine/scene.js).
+ * ECLIPSE_SCENE below carries the act through the extension seams
+ * (chapters → createCamera/sampleChapterFrom, colorScript → buildMoon opt,
+ * chapterCount/simDuration → canonicalPresentation, decorate → host boot
+ * hook). The module still imports NOTHING from engine/ — the injected color
+ * script is composed by the scene-index loader from the pure
+ * makeEclipseColorScript(baseScript) transform, and decorate() receives its
+ * engine modules (moon/post/postm) from the host. Both the standalone driver
+ * (index.html in this folder) and the main page (?scene=eclipse-act)
+ * consume this same config object.
  */
 export const ECLIPSE_META = Object.freeze({
   id: 'eclipse-act',
@@ -146,3 +158,80 @@ export function emberGradeTint(r, g, b) {
     Math.min(1, Math.max(0, b * (1 - 0.08 * mids) - 0.012 * (1 - b))),
   ];
 }
+
+/* ------------------------------------------------------------------ */
+/* Phase 7: the registered scene config + content hooks.               */
+/* ------------------------------------------------------------------ */
+
+/**
+ * PURE transform: derive the eclipse act's injected color script from the
+ * frozen canonical COLOR_SCRIPT (passed in by the caller — this module
+ * imports nothing from engine/). The act's moon is eclipse-dimmed and
+ * ember-warmed:
+ *   - emissive × 0.60 (the act's disc is a dying coal under the shadow;
+ *     the blood ramp mix dims it further via uEclipse)
+ *   - haloTint pushed halfway toward ember-warm [1.00, 0.45, 0.22]
+ *     (lanterns burn vermilion against the dimmed disc)
+ *   - rampCore/Mid/Edge, fresnel, haloGain, exposure: canonical (the blood
+ *     ramp overrides the disc ramp via uEclipse anyway; the limb stays
+ *     neutral per the contract)
+ * Returns a fresh array of fresh keyframe objects (the frozen input is
+ * never mutated). Deterministic: pure function of the input script.
+ */
+export function makeEclipseColorScript(baseScript) {
+  if (!Array.isArray(baseScript) || baseScript.length < 2)
+    throw new Error('makeEclipseColorScript: baseScript must be an array of ≥2 keyframes');
+  const WARM = [1.00, 0.45, 0.22];
+  return baseScript.map((k) => ({
+    name: k.name,
+    emissive: k.emissive.map((v) => v * 0.60),
+    rampCore: k.rampCore.slice(),
+    rampMid: k.rampMid.slice(),
+    rampEdge: k.rampEdge.slice(),
+    fresnel: k.fresnel.slice(),
+    haloTint: k.haloTint.map((v, j) => v + (WARM[j] - v) * 0.5),
+    haloGain: k.haloGain,
+    exposure: k.exposure,
+  }));
+}
+
+/**
+ * Scene CONTENT hook (engine/scene.js `decorate`): runs once at host boot,
+ * after the engine modules are built. The blood-moon effect itself
+ * (setEclipse) is content — it stays here, not in the engine seams.
+ * Receives { moon, post, postm, ... } from the host.
+ */
+export function decorateEclipse({ moon, post, postm }) {
+  // Blood moon for the whole act — the Phase 6 engine hook. Persists across
+  // setChapter() calls (applyChapter never touches uEclipse).
+  moon.setEclipse(ECLIPSE_META.eclipseAmount);
+  // Ember grade: tint the neutral 3D LUT with the config's pure tint
+  // function, swap it in via the public setGrade().
+  const lut = postm.generateNeutralLUT(16);
+  const d = lut.image.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const [r, g, b] = emberGradeTint(d[i] / 255, d[i + 1] / 255, d[i + 2] / 255);
+    d[i] = Math.round(r * 255); d[i + 1] = Math.round(g * 255); d[i + 2] = Math.round(b * 255);
+  }
+  lut.needsUpdate = true;
+  post.setGrade(lut);
+}
+
+/**
+ * The registered scene config (engine/scene.js shape). colorScript is
+ * composed by the scene-index loader via makeEclipseColorScript (null here =
+ * "not yet composed"; the loader fills it from the frozen COLOR_SCRIPT).
+ * chapterLocator is null → the engine default (frozen chapterAt semantics);
+ * the act's 13 chapters scrub linearly like the canonical scene.
+ */
+export const ECLIPSE_SCENE = Object.freeze({
+  id: 'eclipse-act',
+  title: 'Eclipse Act — a blood moon over the valley',
+  chapters: ECLIPSE_CHAPTERS,
+  colorScript: null, // composed by scenes/scene-index.js via makeEclipseColorScript
+  chapterCount: 13,
+  simDuration: 312,
+  chapterLocator: null, // → engine default
+  scrollSpaceVh: 1300,  // 13 chapters × 100vh
+  decorate: decorateEclipse,
+});

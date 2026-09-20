@@ -17,7 +17,7 @@
  *
  * PURE throughout: no Math.random / Date.now / performance.now.
  */
-import { CHAPTERS, chapterAt, simTimeAt, scrollP } from './chapters.js';
+import { CHAPTERS, simTimeAt, scrollP } from './chapters.js';
 
 export const CAMERA_CONTRACT = Object.freeze({
   scrubCurve: 'monotonic, stateless, deterministic (smoothstep between chapter keyframes; chapterT = p * 12)',
@@ -48,8 +48,33 @@ function dirFromAzEl(azimuth, elevation) {
   return { x: Math.cos(azimuth) * ce, y: Math.sin(elevation), z: Math.sin(azimuth) * ce };
 }
 
-/** Phase 4: chapter-keyframed stateless scrub camera. */
-export function createCamera({ chapters = CHAPTERS } = {}) {
+/**
+ * Default chapter locator (Phase 7 extension seam, gap 4): raw normalized
+ * scroll p → { chapterT }, parameterized over the injected chapter count.
+ * For the canonical 13-chapter set this is FLOAT-IDENTICAL to the frozen
+ * chapters.chapterAt(p) (clamp01(p) * 12) — the same mapping, never a second
+ * implementation. A second scene may inject its own locator to redefine the
+ * raw-scroll → chapter mapping; the interpolation model in cameraParamsAt /
+ * evaluateAt is frozen and shared.
+ * PURE in (p, chapterCount).
+ */
+export function defaultChapterLocator(p, chapterCount) {
+  const c = Math.min(1, Math.max(0, p));
+  return { chapterT: c * (chapterCount - 1) };
+}
+
+/**
+ * Phase 4: chapter-keyframed stateless scrub camera.
+ *
+ * @param {object} opts
+ * @param {Array} opts.chapters — chapter keyframes (default: frozen CHAPTERS).
+ * @param {Function} opts.chapterLocator — (p, chapterCount) → { chapterT };
+ *   default: defaultChapterLocator (frozen chapterAt semantics). The raw-
+ *   scroll path evaluate() routes through this injection point; the
+ *   presentation layer keeps calling evaluateAt() with the (possibly
+ *   reduced-motion-quantized) motionChapterT, exactly as before.
+ */
+export function createCamera({ chapters = CHAPTERS, chapterLocator = defaultChapterLocator } = {}) {
   const n = Math.max(2, chapters.length);
 
   /** Smoothstep-interpolated camera params at float chapterT ∈ [0, n-1]. PURE. */
@@ -77,11 +102,13 @@ export function createCamera({ chapters = CHAPTERS } = {}) {
      * clamps, no wall-clock springs — ever. Deterministic render(t) depends
      * on this. This is the CANONICAL entry: chapterT is never quantized here;
      * the presentation layer (engine/presentation.js) quantizes before calling
-     * evaluateAt() under reduced motion.
+     * evaluateAt() under reduced motion. The raw-scroll → chapterT mapping
+     * routes through the injected chapterLocator (default: frozen chapterAt
+     * semantics — float-identical for the canonical 13 chapters).
      */
     evaluate(scrollY, maxScroll) {
       const p = scrollP(scrollY, maxScroll);
-      const { chapterT } = chapterAt(p);
+      const { chapterT } = chapterLocator(p, n);
       return evaluateAt(chapterT);
     },
     /**

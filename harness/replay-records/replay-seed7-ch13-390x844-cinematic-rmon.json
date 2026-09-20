@@ -1,11 +1,16 @@
 {
-  "format": "cme-replay/1",
+  "format": "cme-replay/3",
   "name": "replay-seed7-ch13-390x844-cinematic-rmon",
   "seed": 7,
   "viewport": {
     "w": 390,
-    "h": 844
+    "h": 844,
+    "dpr": 1
   },
+  "scene": "mimas",
+  "chapterCount": 13,
+  "simDuration": 312,
+  "bakeRes": 2048,
   "tierParam": "cinematic",
   "resolvedTier": "still",
   "tierMode": "forced-still",
@@ -14,7 +19,7 @@
   "chapter": 13,
   "canonicalChapterT": 12,
   "motionChapterT": 12,
-  "engineVersion": "fdc10e1ce5866cb2e1853ef4c5f4a03a6d0a6fb6",
+  "engineVersion": "b4946e980f5ac7cddfb23cf3a28713d90d5e8838",
   "pixelSha256": "be5b16f8c62c139cf094b96a9e948aee587f77e575d0443f6b10d7182d4b022c",
   "pixels": {
     "width": 390,

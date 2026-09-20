@@ -590,12 +590,45 @@ function makeHaloTexture(discR) {
 }
 
 /**
+ * Phase 7 extension seam (gap 2): color-script injection. A scene may supply
+ * its own per-chapter color keyframes; applyChapter() below is the SAME code
+ * path parameterized over the active script — never a second implementation.
+ * The canonical COLOR_SCRIPT stays Phase-4-frozen and is the default whenever
+ * no script is injected (null/undefined → COLOR_SCRIPT).
+ *
+ * A color script is an array of ≥2 keyframes, each with:
+ *   emissive, rampCore, rampMid, rampEdge, fresnel, haloTint — [r,g,b] arrays
+ *   haloGain, exposure — finite numbers
+ * (the fields applyChapter reads; mirrors the COLOR_SCRIPT keyframe shape).
+ */
+function validateColorScript(script) {
+  if (!Array.isArray(script) || script.length < 2)
+    throw new Error('colorScript must be an array of ≥2 chapter keyframes');
+  const v3 = ['emissive', 'rampCore', 'rampMid', 'rampEdge', 'fresnel', 'haloTint'];
+  const v1 = ['haloGain', 'exposure'];
+  for (let k = 0; k < script.length; k++) {
+    const f = script[k];
+    for (const name of v3) {
+      if (!f || !Array.isArray(f[name]) || f[name].length !== 3 ||
+          !f[name].every(Number.isFinite))
+        throw new Error(`colorScript[${k}].${name} must be a 3-number [r,g,b] array`);
+    }
+    for (const name of v1) {
+      if (!f || !Number.isFinite(f[name]))
+        throw new Error(`colorScript[${k}].${name} must be a finite number`);
+    }
+  }
+  return script;
+}
+
+/**
  * Build the moon: baked maps, sphere + disc meshes, halo sprites, shader.
  *
  * @param {Rng} rng — seed source (bake stream is derived from rng.seed).
  * @param {object} opts — { resolution=2048, radius=140, chapter=9 (0-indexed
  *   Ch10 hero), sunDirection=Vector3, post (optional: exposure wiring),
- *   meshMode='sphere' }
+ *   meshMode='sphere', colorScript=null (Phase 7: injected per-chapter color
+ *   keyframes; null → the Phase-4-frozen COLOR_SCRIPT default) }
  */
 export function buildMoon(rng = new Rng(7), opts = {}) {
   const resolution = opts.resolution || 2048;
@@ -688,14 +721,22 @@ export function buildMoon(rng = new Rng(7), opts = {}) {
     eclipse: 0,
     meshMode: opts.meshMode || 'sphere',
     scale: 1,
+    // Phase 7: the active color script. Default = the Phase-4-frozen
+    // COLOR_SCRIPT (byte-identical canonical behavior); a scene injects its
+    // own via the colorScript opt or moon.setColorScript().
+    colorScript: opts.colorScript == null ? COLOR_SCRIPT : validateColorScript(opts.colorScript),
   };
 
   function applyChapter(t) {
-    const tc = state.vermilionLock ? 9 : Math.max(0, Math.min(12, t));
-    const i = Math.min(11, Math.floor(tc));
+    const script = state.colorScript;
+    const n = script.length;
+    // For the canonical 13-keyframe script this is exactly the frozen
+    // computation (clamp to [0,12], vermilionLock pins to 9).
+    const tc = state.vermilionLock ? Math.min(n - 1, 9) : Math.max(0, Math.min(n - 1, t));
+    const i = Math.min(n - 2, Math.floor(tc));
     let f = tc - i;
     f = f * f * (3 - 2 * f);
-    const A = COLOR_SCRIPT[i], B = COLOR_SCRIPT[i + 1];
+    const A = script[i], B = script[i + 1];
     const L = (a, b) => a + (b - a) * f;
     const L3 = (a, b) => [L(a[0], b[0]), L(a[1], b[1]), L(a[2], b[2])];
     setUniform3('uEmissive', L3(A.emissive, B.emissive));
@@ -729,6 +770,19 @@ export function buildMoon(rng = new Rng(7), opts = {}) {
     setChapter(t) { applyChapter(t); return this; },
     /** Normalized colorTemp v ∈ [0,1] → chapter coordinate. */
     setColorTemp(v) { applyChapter(Math.max(0, Math.min(1, v)) * 12); return this; },
+    /**
+     * Phase 7: inject a per-chapter color script (validated; see
+     * validateColorScript). Re-applies the current chapter through the SAME
+     * applyChapter code path parameterized over the new script. Pass null to
+     * restore the Phase-4-frozen COLOR_SCRIPT default.
+     */
+    setColorScript(script) {
+      state.colorScript = script == null ? COLOR_SCRIPT : validateColorScript(script);
+      applyChapter(state.chapter);
+      return this;
+    },
+    /** The active color script (the frozen COLOR_SCRIPT unless injected). */
+    get colorScript() { return state.colorScript; },
     /** Blood-moon shift for the Phase 6 eclipse act: deep red ramp, dimmed disc. */
     setEclipse(amount) {
       state.eclipse = Math.max(0, Math.min(1, amount));

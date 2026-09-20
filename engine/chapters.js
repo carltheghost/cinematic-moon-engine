@@ -198,18 +198,30 @@ export function chapterAt(p) {
 }
 
 /**
- * chapterT∈[0,12] (clamped) → interpolated chapter params. LERPs all numeric
- * fields between adjacent chapters (fogDensity, ember.*, lantern
- * hero/pool intensity+visibility, glint, exposure, camera.*). heroSlots,
- * beats, name, act, role are taken from the NEAREST chapter (no lerp).
- * Returns a fresh UNFROZEN object. PURE.
+ * chapterT (clamped) → interpolated chapter params over ANY chapter array
+ * with the canonical field shape (camera + fogDensity + ember + lantern +
+ * glint + exposure). Phase 7 extension seam: this is the SAME interpolation
+ * model as the frozen sampleChapter() — parameterized over the chapter data
+ * ("one mechanism": sampleChapter(chapterT) === sampleChapterFrom(CHAPTERS,
+ * chapterT), float-identical). Second scenes sample their own config through
+ * this; the canonical CHAPTERS values are never touched.
+ * LERPs all numeric fields between adjacent chapters (fogDensity, ember.*,
+ * lantern hero/pool intensity+visibility, glint, exposure, camera.*).
+ * heroSlots, beats, name, act, role are taken from the NEAREST chapter
+ * (no lerp). Narrative metadata (beats/act) is OPTIONAL per chapter — a
+ * scene that ships no beats gets `beats: undefined` instead of a throw;
+ * when present, the canonical output shape and values are byte-identical
+ * to the pre-Phase-7 sampleChapter(). Returns a fresh UNFROZEN object. PURE.
  */
-export function sampleChapter(chapterT) {
-  const t = Math.min(CHAPTER_COUNT - 1, Math.max(0, chapterT));
-  const i = Math.min(CHAPTER_COUNT - 2, Math.floor(t));
+export function sampleChapterFrom(chapters, chapterT) {
+  if (!Array.isArray(chapters) || chapters.length < 2)
+    throw new Error('sampleChapterFrom: chapters must be an array of ≥2 keyframes');
+  const lastT = chapters.length - 1;
+  const t = Math.min(lastT, Math.max(0, chapterT));
+  const i = Math.min(chapters.length - 2, Math.floor(t));
   const f = t - i;
-  const a = CHAPTERS[i];
-  const b = CHAPTERS[i + 1];
+  const a = chapters[i];
+  const b = chapters[i + 1];
   const lerp = (x, y) => x + (y - x) * f;
   const nearest = f < 0.5 ? a : b;
   return {
@@ -217,7 +229,9 @@ export function sampleChapter(chapterT) {
     name: nearest.name,
     act: nearest.act,
     role: nearest.role,
-    beats: { hard: nearest.beats.hard, sad: nearest.beats.sad, happy: nearest.beats.happy, creative: nearest.beats.creative },
+    beats: nearest.beats
+      ? { hard: nearest.beats.hard, sad: nearest.beats.sad, happy: nearest.beats.happy, creative: nearest.beats.creative }
+      : undefined,
     fogDensity: lerp(a.fogDensity, b.fogDensity),
     ember: {
       density: lerp(a.ember.density, b.ember.density),
@@ -242,6 +256,15 @@ export function sampleChapter(chapterT) {
       fov: lerp(a.camera.fov, b.camera.fov),
     },
   };
+}
+
+/**
+ * chapterT∈[0,12] (clamped) → interpolated chapter params. Frozen canonical
+ * sampler: delegates to the parameterized sampleChapterFrom over the frozen
+ * CHAPTERS (float-identical — same code path, same data).
+ */
+export function sampleChapter(chapterT) {
+  return sampleChapterFrom(CHAPTERS, chapterT);
 }
 
 /** p∈[0,1] → p * SIM_DURATION. Deterministic sim-seconds — the ONLY clock the engine may use. PURE. */

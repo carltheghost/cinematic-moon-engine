@@ -10,8 +10,10 @@
  * ECL2. blood-moon hook engaged: moon.eclipse (uEclipse) == 1
  * ECL3. blood-moon visual: disc-center 5×5 mean (R − B) > 20 (deep red disc)
  * ECL4. the scene is alive: renderFrame(0) vs renderFrame(312) differ
- * ECL5. config actually drives the frame: sampleEclipse(6).ember.warmth == 1.0
- *       (mid-totality ember peak) and env ember population > 0
+ * ECL5. config drives the frame: sampleAt(6).ember.warmth == 1.0
+ *       (mid-totality ember peak, via the engine's sampleChapterFrom) and
+ *       env ember population > 0
+ * ECL6. driver consumes the registered scene config (scene.id).
  *
  * Usage: node probe-eclipse.js [--viewport=1440x900] [--seed=7] [--tier=cinematic]
  */
@@ -85,9 +87,10 @@ async function main() {
       return {
         eclipse: e.moon.eclipse,
         discR: +(sr / n).toFixed(1), discG: +(sg / n).toFixed(1), discB: +(sb / n).toFixed(1),
-        warmth6: e.sampleEclipse(6).ember.warmth,
+        warmth6: e.sampleAt(6).ember.warmth,
         embers: e.env.counts.embers,
-        uEclipseUniform: e.moon.group ? undefined : undefined,
+        sceneId: e.scene.id,
+        injectedScript: e.moon.colorScript !== undefined && e.scene.colorScript === null,
       };
     })()`);
     check('ECL2. blood-moon hook engaged (moon.eclipse == 1)', st.eclipse === 1,
@@ -97,7 +100,10 @@ async function main() {
       redDominance > 20, `disc RGB=(${st.discR},${st.discG},${st.discB}) R−B=${redDominance.toFixed(1)}`);
     check('ECL5. config drives the frame (ember warmth peak + population)',
       st.warmth6 === 1.0 && st.embers > 0,
-      `sampleEclipse(6).ember.warmth=${st.warmth6} embers=${st.embers}`);
+      `sampleAt(6).ember.warmth=${st.warmth6} embers=${st.embers}`);
+    check('ECL6. driver consumes the registered scene config',
+      st.sceneId === 'eclipse-act',
+      `scene.id=${st.sceneId}`);
 
     // ECL4: the scene is alive (different chapters differ).
     const alive = await page.evaluate(`(() => {

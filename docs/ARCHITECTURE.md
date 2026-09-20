@@ -53,4 +53,12 @@ drive downstream modules through **explicit inputs only**:
   (`docs/regression-philosophy.md`, frozen Phase 6).
 - Replay contract: a record's identity is
   (seed, viewport, resolvedTier, reducedMotion, canonicalScrollT); auto mode
-  is never part of the identity (`harness/replay.js`).
+  is never part of the identity; "viewport" = CSS dims + devicePixelRatio at
+  boot; the seeded moon bake is pinned to 2048² at record AND compare time
+  (`?bakeRes=`, format `cme-replay/3`) because the production wall-clock
+  bake-budget fallback (2048²→1024²) is load-dependent and would otherwise
+  make desktop replay a coin flip (`harness/replay.js`).
+- Scene extension (Phase 7): second scenes are explicit config through
+  injection points / registration (`engine/scene.js`, `?scene=`), never a
+  second implementation path; canonical defaults stay byte-identical
+  (`docs/scene-extension.md`).

@@ -40,7 +40,7 @@
  * deterministic function of the host-fed deterministic `frame`
  * (see post.js render()).
  */
-import { simTimeAt, scrollP, CHAPTER_COUNT, SIM_DURATION } from './chapters.js';
+import { scrollP, CHAPTER_COUNT, SIM_DURATION } from './chapters.js';
 
 export const PRESENTATION_CONTRACT = Object.freeze({
   canonical: 'canonicalChapterT = p * 12, never quantized (screenshots/regression/replay)',
@@ -51,23 +51,35 @@ export const PRESENTATION_CONTRACT = Object.freeze({
   prohibited: 'wall-clock reads (Date.now, performance.now), frame-delta clocks (clock.getDelta), and frame counters (frameCount++)',
 });
 
-/** Stepped stills: quantize to the nearest whole chapter (lands on keyframes). PURE. */
-export function quantizeChapterT(chapterT) {
-  const t = Math.min(CHAPTER_COUNT - 1, Math.max(0, chapterT));
+/** Stepped stills: quantize to the nearest whole chapter (lands on keyframes). PURE.
+ * Phase 7: parameterized over chapterCount (default 13 = the frozen canonical
+ * value) — same implementation, never a second path. */
+export function quantizeChapterT(chapterT, chapterCount = CHAPTER_COUNT) {
+  const t = Math.min(chapterCount - 1, Math.max(0, chapterT));
   return Math.round(t);
 }
 
 /**
  * Reduce raw scroll state to the canonical presentation coordinate set.
  * PURE in ({ scrollY, maxScroll, reducedMotion }).
+ *
+ * Phase 7 extension seam (gap 3): the clock is explicitly configurable via
+ * { chapterCount, simDuration }. Defaults (13, 312) are the Phase-4-frozen
+ * canonical values and are FLOAT-IDENTICAL to the pre-Phase-7 computation:
+ *   - scrollP already clamps p∈[0,1], so p * simDuration === simTimeAt(p)
+ *     for the 13/312 default (simTimeAt(p) = clamp01(p) * 312).
+ *   - chapterCount - 1 === CHAPTER_COUNT - 1 === 12 for the default.
+ * A second scene passes its own config; the canonical scene passes nothing.
  */
-export function canonicalPresentation({ scrollY, maxScroll, reducedMotion = false }) {
+export function canonicalPresentation({ scrollY, maxScroll, reducedMotion = false,
+  chapterCount = CHAPTER_COUNT, simDuration = SIM_DURATION }) {
   const p = scrollP(scrollY, maxScroll);
-  const canonicalChapterT = Math.min(CHAPTER_COUNT - 1, Math.max(0, p * (CHAPTER_COUNT - 1)));
-  const motionChapterT = reducedMotion ? quantizeChapterT(canonicalChapterT) : canonicalChapterT;
-  const canonicalSimTime = simTimeAt(p);
+  const lastT = chapterCount - 1;
+  const canonicalChapterT = Math.min(lastT, Math.max(0, p * lastT));
+  const motionChapterT = reducedMotion ? quantizeChapterT(canonicalChapterT, chapterCount) : canonicalChapterT;
+  const canonicalSimTime = p * simDuration;
   const motionSimTime = reducedMotion
-    ? (motionChapterT / (CHAPTER_COUNT - 1)) * SIM_DURATION
+    ? (motionChapterT / lastT) * simDuration
     : canonicalSimTime;
   const frame = reducedMotion ? 0 : Math.floor(motionSimTime * 60);
   return {
