@@ -532,10 +532,15 @@ void main() {
 
   // Phase 16: the legacy shader outputs premultiplied color (col*a) while
   // AdditiveBlending applies source alpha again, so the visible contribution
-  // is effectively col*a^2. signalLift=0 preserves that exact historical path.
-  // signalLift=1 outputs straight color and lets blending apply alpha once
-  // (effective col*a). Intermediate values provide a continuous, bounded lift.
+  // is effectively col*a^2. Keep the exact legacy expression on the zero path
+  // so existing scenes do not acquire a new floating-point route.
   float lift = clamp(uEmberSignalLift, 0.0, 1.0);
+  if (lift <= 0.0) {
+    gl_FragColor = vec4(col * a, a);
+    return;
+  }
+  // lift=1 outputs straight color and lets blending apply alpha once
+  // (effective col*a). Intermediate values provide a continuous, bounded lift.
   vec3 src = mix(col * a, col, lift);
   gl_FragColor = vec4(src, a);
 }
