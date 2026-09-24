@@ -238,6 +238,9 @@ export function sampleChapterFrom(chapters, chapterT) {
       opacity: lerp(a.ember.opacity, b.ember.opacity),
       drift: lerp(a.ember.drift, b.ember.drift),
       warmth: lerp(a.ember.warmth, b.ember.warmth),
+      // Optional extension seam. Existing scenes omit signalLift and therefore
+      // interpolate as zero, preserving their historical pixels exactly.
+      signalLift: lerp(a.ember.signalLift ?? 0, b.ember.signalLift ?? 0),
     },
     lantern: {
       heroIntensity: lerp(a.lantern.heroIntensity, b.lantern.heroIntensity),
