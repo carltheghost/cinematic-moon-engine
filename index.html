@@ -86,6 +86,13 @@ const TIER_PARAM = params.get('tier');
 /* Phase 5 A/B: ?emberfloor=1 forces the mobile ember perceptual floor on
  * (default off = Grok variant). See docs/phase5-design.md §4. */
 const EMBER_FLOOR = params.get('emberfloor') === '1';
+/* Phase 16 experiment seam: ?emberlift=0..1 lifts the additive ember signal
+ * without rewriting scene chapter data. Unset means the scene-config value
+ * (or zero for legacy scenes), so canonical URLs stay byte-compatible. */
+const emberLiftRaw = params.get('emberlift');
+const EMBER_SIGNAL_LIFT = emberLiftRaw === null
+  ? null
+  : Math.max(0, Math.min(1, Number(emberLiftRaw) || 0));
 /* Autoplay (opt-in, presentation only): advances a virtual scroll by a FIXED
  * 2px per rAF tick (frame-counted, NOT time-based). EXCLUDED from the
  * determinism contract — the contract covers explicit scroll positions only. */
@@ -311,9 +318,12 @@ function applyScrollState(scrollY) {
   const ch = chaptersm.sampleChapterFrom(sceneCfg.chapters, pres.motionChapterT);
   moon.setChapter(pres.motionChapterT);
   const V = Math.exp(-Math.pow(400 * ch.fogDensity, 2)); // atmospheric transmission, dRef=400 — same formula as env docs
+  const emberParams = EMBER_SIGNAL_LIFT === null
+    ? ch.ember
+    : { ...ch.ember, signalLift: EMBER_SIGNAL_LIFT };
   env.setChapterEnv({
     fogDensity: ch.fogDensity,
-    ember: ch.ember,
+    ember: emberParams,
     lantern: ch.lantern,
     glint: { peak: V * ch.glint, width: 1 + 2.5 * (1 - V), contrast: 0.4 + 0.6 * V },
   });
@@ -483,6 +493,7 @@ window.__cme = {
   scene: sceneCfg.id, // Phase 7: the active scene id (?scene=)
   sceneConfig: sceneCfg, // Phase 7: the resolved scene config
   bakeResPin: BAKE_RES_PIN, // Phase 7: ?bakeRes= pin (0 = production budget behavior)
+  emberSignalLiftOverride: EMBER_SIGNAL_LIFT, // Phase 16: null unless ?emberlift= is explicit
   get bakeResolution() { return resolution; }, // Phase 7: actual bake res (2048 or 1024 fallback)
 };
 
