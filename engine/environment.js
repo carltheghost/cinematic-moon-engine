@@ -517,6 +517,7 @@ varying float vSeed;
 uniform float uEmberOpacity; // chapter curve: fragment-alpha gate (applied FIRST)
 uniform float uEmberDensity; // chapter curve: deterministic population gate
 uniform float uEmberWarmth;  // chapter curve: warm-color mix factor scale
+uniform float uEmberSignalLift; // Phase 16: 0=legacy a^2 signal, 1=linear additive signal
 uniform float uFloorOpacity; // Phase 5 A/B perceptual floor: min alpha multiplier (0 = off)
 void main() {
   // Density: deterministic discard — a pure function of the seed, no randomness.
@@ -528,7 +529,15 @@ void main() {
   float a = smoothstep(1.0, 0.2, d) * vFade * 0.55 * max(uEmberOpacity, uFloorOpacity);
   // Warmth scales the warm mix factor (mixes toward the cool base when low).
   vec3 col = mix(vec3(0.42, 0.38, 0.44), vec3(0.55, 0.38, 0.22), vWarm * uEmberWarmth);
-  gl_FragColor = vec4(col * a, a);
+
+  // Phase 16: the legacy shader outputs premultiplied color (col*a) while
+  // AdditiveBlending applies source alpha again, so the visible contribution
+  // is effectively col*a^2. signalLift=0 preserves that exact historical path.
+  // signalLift=1 outputs straight color and lets blending apply alpha once
+  // (effective col*a). Intermediate values provide a continuous, bounded lift.
+  float lift = clamp(uEmberSignalLift, 0.0, 1.0);
+  vec3 src = mix(col * a, col, lift);
+  gl_FragColor = vec4(src, a);
 }
 `;
 
@@ -561,6 +570,7 @@ function buildEmbers(rngE, count, avoidEmber, uPixelRatio) {
       uEmberDensity: { value: 1 },
       uEmberDrift: { value: 1 },
       uEmberWarmth: { value: 1 },
+      uEmberSignalLift: { value: 0 }, // Phase 16 opt-in; 0 preserves legacy pixels
       uFloorSize: { value: 0 },    // Phase 5 A/B perceptual floor (0 = off)
       uFloorOpacity: { value: 0 }, // Phase 5 A/B perceptual floor (0 = off)
     },
@@ -817,12 +827,15 @@ export function buildEnvironment(rng = new Rng(7), opts = {}) {
 
   /** Ember chapter gating — curves, not binary on/off (Q4: gate opacity
    * first, keep the 420 deterministic population, keep the grain rule). */
-  function setEmbers({ opacity, density, drift, warmth } = {}) {
+  function setEmbers({ opacity, density, drift, warmth, signalLift } = {}) {
     const u = embers.mat.uniforms;
     if (opacity !== undefined) u.uEmberOpacity.value = opacity;
     if (density !== undefined) u.uEmberDensity.value = density;
     if (drift !== undefined) u.uEmberDrift.value = drift;
     if (warmth !== undefined) u.uEmberWarmth.value = warmth;
+    if (signalLift !== undefined) {
+      u.uEmberSignalLift.value = Math.max(0, Math.min(1, Number(signalLift) || 0));
+    }
   }
 
   /* Hero-light reassignment (Q3: hard cap of 4 real lights stays; reassign
