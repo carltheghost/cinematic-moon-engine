@@ -260,3 +260,30 @@ chroma. Second full run: **=== Phase 4 PASS ===**.
   physical-device measurement; headless numbers only guard regressions.
 - Phase 5 (per-tier post-processing pipeline) not yet started; awaits the
   Phase 5 review gate (GPT + Grok browser consults on review-phase4.md).
+
+## Scene: tidal-lock — "How the Moon Became Tidally Locked" (2026-10-04)
+
+A third scene (`?scene=tidal-lock`) built on the Phase 7 extension seams — no
+engine edits. Seven scroll chapters stage the despin story: the young Moon
+spinning 9×/orbit on a close orbit → tidal bulges rise → friction drags the
+bulges into a lagging torque → spin decays while the orbit widens → the lock
+moment (spin = orbit, hero beat) → libration → the Moon as we know it.
+
+- `scenes/tidallock/tidal.js` — pure tidal physics (spin-rate decay, analytic
+  spin-angle integral with exact face-to-Earth phase at lock, orbit recession,
+  bulge lag → 0, post-lock libration). Deterministic; no clocks, no random.
+- `scenes/tidallock/earth.js` — seeded procedural Earth (gradient-noise fbm
+  continents, biomes, ice caps, cloud wisps; seamless longitude) + fresnel
+  atmosphere shell, same-seed-same-planet.
+- `scenes/tidallock/audio-cues.js` + `audio-driver.js` — the scroll-synced
+  score: sub-bass rumble whose pitch FALLS as the spin decays, tension drone
+  through the slowdown, a struck gong on the lock pulse, post-lock heartbeat.
+  Cue parameters are pure functions of scroll position (scrub the page, scrub
+  the score); WebAudio rendering is host-side presentation only.
+- `scenes/tidallock/tidallock-config.js` — 7 chapters, bone-neutral injected
+  color script (documentary moon, not vermilion), cinematic lower-third
+  captions, gold spin marker + tidal-bulge + drag-arc staging in `decorate()`.
+- `harness/checks-phase8.js` — 52 node checks, all passing: physics
+  determinism, exact lock (facing error ≡ 0 for t ≥ T_LOCK), audio purity,
+  chapter contract, color-script transform, Earth noise determinism +
+  seamless longitude, no-clocks/no-random hygiene.
