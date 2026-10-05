@@ -41,9 +41,12 @@ export function audioCueAt(t) {
   // The lock hit: a resonant gong exactly on the lock pulse.
   const chime = lockPulseAt(t);
   // Post-lock heartbeat at the orbital period — one face, one pulse.
+  // The phase tracks the actual orbital advance past the lock
+  // (orbitAngleAt(t) − orbitAngleAt(T_LOCK)), so the pulse lands once per
+  // real orbit, not ORBITS times per remaining act.
   let heartbeat = 0;
   if (t > T_LOCK) {
-    const ph = ((t - T_LOCK) * ORBITS * 2 * Math.PI) / (1 - T_LOCK);
+    const ph = (t - T_LOCK) * ORBITS * 2 * Math.PI;
     heartbeat = Math.pow(0.5 + 0.5 * Math.sin(ph), 6) * Math.min(1, (t - T_LOCK) / 0.06);
   }
   return Object.freeze({

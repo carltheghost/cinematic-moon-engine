@@ -2,7 +2,9 @@
  *
  * Node-runnable (no DOM, no WebGL): asserts the scene's pure contracts —
  * tidal physics determinism and lock behavior, audio cue purity, chapter
- * config shape, the color-script transform, and the no-clocks/no-random
+ * config shape AND keyframe framing (the Moon in frame at every chapter on
+ * portrait + desktop), the bulge-lead convention, the heartbeat's true
+ * orbital phase, the color-script transform, and the no-clocks/no-random
  * source rule for scenes/tidallock/.
  *
  * Run: node harness/checks-phase8.js   (from the repo root)
@@ -171,7 +173,7 @@ const eq = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
   const out1 = cfg.makeTidalColorScript(base);
   const out2 = cfg.makeTidalColorScript(base);
   check('colorscript: deterministic', JSON.stringify(out1) === JSON.stringify(out2));
-  check('colorscript: same keyframe count', out1.length === base.length);
+  check('colorscript: resampled to the 7-chapter clock', out1.length === 7, `got ${out1.length}`);
   check('colorscript: input never mutated',
     base[0].haloTint[0] === 1 && base[0].emissive[0] === 1);
   check('colorscript: emissive dimmed ×0.9', eq(out1[0].emissive[0], 0.9));
@@ -182,9 +184,120 @@ const eq = (a, b, eps = 1e-9) => Math.abs(a - b) <= eps;
     `r=${out1[0].rampCore[0].toFixed(3)} g=${out1[0].rampCore[1].toFixed(3)}`);
   check('colorscript: cool limb preserved',
     JSON.stringify(out1[0].rampEdge) === JSON.stringify(base[0].rampEdge));
+  // The warm→cool progression must run to completion: the last frame has
+  // warmth 0, i.e. a perfectly neutral bone ramp (r === g === b).
+  const last = out1[out1.length - 1];
+  check('colorscript: final frame reaches neutral bone (warmth 0)',
+    eq(last.rampCore[0], last.rampCore[1]) && eq(last.rampCore[1], last.rampCore[2]),
+    last.rampCore.map((v) => v.toFixed(4)).join(','));
+  // A 13-keyframe canonical script also lands on 7 frames, endpoints pinned.
+  const mkFrame = (i) => ({
+    name: `k${i}`, emissive: [1, 1, 1],
+    rampCore: [0.9 - 0.01 * i, 0.2 + 0.01 * i, 0.1],
+    rampMid: [0.8 - 0.01 * i, 0.22 + 0.01 * i, 0.1],
+    rampEdge: [0.5, 0.5, 0.55], fresnel: [0.1, 0.1, 0.1],
+    haloTint: [1, 0.5, 0.3], haloGain: 1.0 - 0.02 * i, exposure: 1.0,
+  });
+  const base13 = [];
+  for (let i = 0; i < 13; i++) base13.push(mkFrame(i));
+  const out13 = cfg.makeTidalColorScript(base13);
+  check('colorscript: 13-frame script → 7 frames', out13.length === 7);
+  check('colorscript: resample pins the first frame',
+    eq(out13[0].haloGain, 1.0 * 0.8), `got ${out13[0].haloGain}`);
+  const last13 = out13[6];
+  check('colorscript: resample pins the last frame at warmth 0',
+    eq(last13.rampCore[0], last13.rampCore[1]) && eq(last13.rampCore[1], last13.rampCore[2]));
   let threw = false;
   try { cfg.makeTidalColorScript([{ name: 'x' }]); } catch (e) { threw = true; }
   check('colorscript: rejects short scripts loudly', threw);
+}
+
+/* --- config: chapter framing — the Moon stays in frame -----------------
+ * Pure NDC check using the scene's own camera convention
+ * (camPos = dirFromAzEl(az,el)·dist, viewDir = dirFromAzEl(lookAz,lookEl)).
+ * Calibrated: the pre-fix config reproduced the reviewer's numbers exactly
+ * (ch3 x≈3.07, ch4 x≈−3.01, ch6 x≈−5.49, ch7 x≈1.55 at 390×844).
+ */
+{
+  const chapters = cfg.TIDAL_CHAPTERS;
+  function dirFromAzEl(az, el) {
+    const ce = Math.cos(el);
+    return [Math.cos(az) * ce, Math.sin(el), Math.sin(az) * ce];
+  }
+  function ndcMoon(ch, i, w, h) {
+    const cam = ch.camera;
+    const cp = dirFromAzEl(cam.az, cam.el);
+    const C = [cp[0] * cam.dist, cp[1] * cam.dist, cp[2] * cam.dist];
+    const f0 = dirFromAzEl(cam.lookAz, cam.lookEl);
+    const fl = Math.hypot(f0[0], f0[1], f0[2]);
+    const f = [f0[0] / fl, f0[1] / fl, f0[2] / fl];
+    // right = normalize(cross(f, +Y)), up = cross(right, f)
+    let rx = f[2], ry = 0, rz = -f[0];
+    const rl = Math.hypot(rx, ry, rz) || 1; rx /= rl; ry /= rl; rz /= rl;
+    const ux = ry * f[2] - rz * f[1], uy = rz * f[0] - rx * f[2], uz = rx * f[1] - ry * f[0];
+    const st = tidalState(i / 6);
+    const d = [st.moonX - C[0], 0 - C[1], st.moonZ - C[2]];
+    const zc = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
+    const tanV = Math.tan((cam.fov * Math.PI / 180) / 2);
+    const tanH = tanV * (w / h);
+    const nx = (d[0] * rx + d[1] * ry + d[2] * rz) / (zc * tanH);
+    const ny = (d[0] * ux + d[1] * uy + d[2] * uz) / (zc * tanV);
+    return { nx, ny, zc };
+  }
+  for (const vp of [[390, 844, '390×844 portrait'], [1440, 900, '1440×900 desktop']]) {
+    const w = vp[0], h = vp[1], label = vp[2];
+    let worst = 0, okAll = true, detail = '';
+    for (let i = 0; i < chapters.length; i++) {
+      const r = ndcMoon(chapters[i], i, w, h);
+      const m = Math.max(Math.abs(r.nx), Math.abs(r.ny));
+      if (m > worst) { worst = m; detail = `ch${i + 1} (${r.nx.toFixed(2)},${r.ny.toFixed(2)})`; }
+      if (!(m <= 0.9 && r.zc > 0)) okAll = false;
+    }
+    check(`framing: Moon in frame at all 7 chapter keyframes (${label})`,
+      okAll, `worst |ndc|=${worst.toFixed(2)} at ${detail}`);
+  }
+}
+
+/* --- config: the tidal bulge LEADS the Earth line ----------------------
+ * In the (x, z) world-angle parameterization α with (cosα, 0, sinα), the
+ * Earth direction from the Moon is α_E = orbitAngle + π and the spin
+ * advances toward increasing α. bulgeRotationY must place the bulge axis at
+ * α_E + lag (leading), never trailing — the depicted torque then brakes the
+ * spin, matching the narration.
+ */
+{
+  function wrapPi(a) {
+    const TAU = Math.PI * 2;
+    a = a % TAU;
+    if (a > Math.PI) a -= TAU;
+    if (a < -Math.PI) a += TAU;
+    return a;
+  }
+  const stEarly = tidalState(0.1);
+  const thEarly = cfg.bulgeRotationY(stEarly);
+  const leadEarly = wrapPi(-thEarly - (stEarly.orbitAngle + Math.PI));
+  check('bulge: leads the Earth line while spinning fast',
+    leadEarly > 0.15 && Math.abs(leadEarly - stEarly.bulgeLag) < 1e-9,
+    `lead=${leadEarly.toFixed(3)} lag=${stEarly.bulgeLag.toFixed(3)}`);
+  const stLock = tidalState(TIDAL.T_LOCK);
+  const leadLock = wrapPi(-cfg.bulgeRotationY(stLock) - (stLock.orbitAngle + Math.PI));
+  check('bulge: aligned with the Earth line once locked',
+    Math.abs(leadLock) < 1e-9, `lead=${leadLock}`);
+}
+
+/* --- audio-cues.js: heartbeat runs at the true orbital period ----------
+ * Post-lock the Moon completes ORBITS·(1−T_LOCK) orbits; the heartbeat must
+ * complete the same count. Equivalently its phase is the real orbital
+ * advance past the lock: orbitAngleAt(t) − orbitAngleAt(T_LOCK). At the
+ * quarter-orbit mark the pulse is exactly at its peak (fade fully in).
+ */
+{
+  const tStar = TIDAL.T_LOCK + 1 / (4 * TIDAL.ORBITS);
+  const hb = audioCueAt(tStar).heartbeat;
+  const adv = orbitAngleAt(tStar) - orbitAngleAt(TIDAL.T_LOCK);
+  check('audio: heartbeat peaks exactly one quarter-orbit after lock',
+    Math.abs(hb - 1) < 1e-9 && Math.abs(adv - Math.PI / 2) < 1e-9,
+    `heartbeat=${hb.toFixed(4)} advance=${adv.toFixed(4)}`);
 }
 
 /* --- earth.js: seeded noise works with the real engine Rng ---------------- */

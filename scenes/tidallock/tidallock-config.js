@@ -78,28 +78,71 @@ function chapter(id, name, role, cam, exposure, extra = {}) {
 // Hero chapter (ch5) aims at the Moon where it sits mid-chapter (t = 4/6).
 const HERO_AIM = lookAtMoon(2.60, 0.18, 250, 4 / 6);
 
+/* PURE: the bulge group's rotation.y for a tidal state (radians).
+ *
+ * The dissipative bulge LEADS the Earth–Moon line in the prograde sense, so
+ * that Earth's pull on the leading bulge supplies the braking torque that
+ * despins the Moon. three.js +Y rotation maps local +X toward −Z, i.e. the
+ * bulge axis world-angle is α = −θ; with θ = π − orbitAngle the +X (near)
+ * bulge points exactly at Earth, and SUBTRACTING the lag rotates the axis to
+ * α_E + lag — ahead of the Earth line in the direction of increasing spin.
+ */
+export function bulgeRotationY(st) {
+  return Math.PI - st.orbitAngle - st.bulgeLag;
+}
+
+/* PURE: linear resample of a keyframe color script to n frames (n ≥ 2).
+ * Used because the canonical COLOR_SCRIPT has 13 keyframes but the tidal act
+ * only ever addresses 7 chapter positions — without resampling, frames 7–12
+ * are unreachable and the warm→cool progression stops halfway.
+ */
+function resampleScript(baseScript, n) {
+  const m = baseScript.length;
+  const lerp = (a, b, f) => a + (b - a) * f;
+  const lerpArr = (A, B, f) => A.map((a, i) => lerp(a, B[i], f));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const x = (i / (n - 1)) * (m - 1);
+    const j = Math.min(m - 2, Math.floor(x));
+    const f = x - j;
+    const A = baseScript[j], B = baseScript[j + 1];
+    out.push({
+      name: f < 0.5 ? A.name : B.name,
+      emissive: lerpArr(A.emissive, B.emissive, f),
+      rampCore: lerpArr(A.rampCore, B.rampCore, f),
+      rampMid: lerpArr(A.rampMid, B.rampMid, f),
+      rampEdge: lerpArr(A.rampEdge, B.rampEdge, f),
+      fresnel: lerpArr(A.fresnel, B.fresnel, f),
+      haloTint: lerpArr(A.haloTint, B.haloTint, f),
+      haloGain: lerp(A.haloGain, B.haloGain, f),
+      exposure: lerp(A.exposure, B.exposure, f),
+    });
+  }
+  return out;
+}
+
 export const TIDAL_CHAPTERS = Object.freeze([
   chapter(1, 'First Spin',
-    'Four billion years ago the Moon is young, close, and spinning — nine days in a single orbit.',
-    { az: 0.60, el: 0.35, dist: 980, ...lookAtOrigin(0.60, 0.35), fov: 56 }, 0.95),
+    'Four billion years ago the Moon is young, close, and spinning — nine turns for every trip around Earth.',
+    { az: 0.60, el: 0.35, dist: 980, ...lookAtMoon(0.60, 0.35, 980, 0 / 6), fov: 56 }, 0.95),
   chapter(2, 'The Pull',
     "Earth's gravity reaches across the gap and raises the oceans of rock — tidal bulges rise on the Moon.",
-    { az: 1.10, el: 0.30, dist: 760, ...lookAtOrigin(1.10, 0.30), fov: 55 }, 1.00),
+    { az: 1.10, el: 0.30, dist: 760, ...lookAtMoon(1.10, 0.30, 760, 1 / 6), fov: 55 }, 1.00),
   chapter(3, 'The Drag',
-    'The bulges lag behind the pull. Friction turns rock against rock — a brake the size of a world.',
-    { az: 1.60, el: 0.26, dist: 560, ...lookAtOrigin(1.60, 0.26), fov: 54 }, 1.02),
+    'Friction drags the bulges ahead of the pull — and Earth hauls back on them, a brake the size of a world.',
+    { az: 1.60, el: 0.26, dist: 560, ...lookAtMoon(1.60, 0.26, 560, 2 / 6), fov: 54 }, 1.02),
   chapter(4, 'The Long Slowdown',
     'Every century the spin bleeds away. The stolen momentum lifts the Moon — its orbit widens.',
-    { az: 2.10, el: 0.22, dist: 430, ...lookAtOrigin(2.10, 0.22), fov: 52 }, 1.04),
+    { az: 2.10, el: 0.22, dist: 430, ...lookAtMoon(2.10, 0.22, 430, 3 / 6), fov: 52 }, 1.04),
   chapter(5, 'The Lock',
     'Spin equals orbit. The brake releases — one face turns to Earth, and never turns away again.',
     { az: 2.60, el: 0.18, dist: 250, lookAz: HERO_AIM.lookAz, lookEl: HERO_AIM.lookEl, fov: 48 }, 1.12),
   chapter(6, 'One Face',
     'Locked — but not frozen. The Moon nods as it goes, a slow libration, like it is still dreaming.',
-    { az: 3.10, el: 0.28, dist: 420, ...lookAtOrigin(3.10, 0.28), fov: 52 }, 1.02),
+    { az: 3.10, el: 0.28, dist: 420, ...lookAtMoon(3.10, 0.28, 420, 5 / 6), fov: 52 }, 1.02),
   chapter(7, 'Today',
     'The Moon we know: one face forever, drifting a little farther every year — still slowing, still bound.',
-    { az: 3.60, el: 0.14, dist: 780, ...lookAtOrigin(3.60, 0.14), fov: 58 }, 1.00),
+    { az: 3.60, el: 0.14, dist: 780, ...lookAtMoon(3.60, 0.14, 780, 6 / 6), fov: 58 }, 1.00),
 ]);
 
 export const TIDAL_META = Object.freeze({
@@ -122,14 +165,20 @@ export const TIDAL_META = Object.freeze({
 export function makeTidalColorScript(baseScript) {
   if (!Array.isArray(baseScript) || baseScript.length < 2)
     throw new Error('makeTidalColorScript: baseScript must be an array of ≥2 keyframes');
+  // The scene addresses exactly TIDAL_CHAPTERS.length chapter positions;
+  // resample the canonical script down to that clock so the warm→cool
+  // progression runs to completion instead of stopping halfway.
+  const script = baseScript.length === TIDAL_CHAPTERS.length
+    ? baseScript
+    : resampleScript(baseScript, TIDAL_CHAPTERS.length);
   const lum = (c) => 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
   const toBone = (c, warmth) => {
     const l = lum(c);
     // bone: luminance with a whisper of warmth, cool edge preserved
     return [l + warmth * 0.030, l + warmth * 0.012, l - warmth * 0.018];
   };
-  return baseScript.map((k, i) => {
-    const warmth = 1 - i / (baseScript.length - 1); // warmer early, cooler late
+  return script.map((k, i) => {
+    const warmth = 1 - i / (script.length - 1); // warmer early, cooler late
     return {
       name: k.name,
       emissive: k.emissive.map((v) => v * 0.9),
@@ -196,15 +245,22 @@ export function decorateTidal({ moon, env, post, postm, camera, scene, renderer,
   earthGroup.add(atmo);
   scene.add(earthGroup);
 
-  /* --- The Moon, re-staged: orbit pivot → spin pivot → engine moon. --- */
+  /* --- The Moon, re-staged: orbit pivot → (marker spin pivot, moon). --- */
   const orbitPivot = new THREE.Group();   // positioned on the orbit each frame
-  const spinPivot = new THREE.Group();    // rotated by the spin angle
-  spinPivot.add(moon.group);
+  const spinPivot = new THREE.Group();    // rotated by the spin angle (marker only)
   orbitPivot.add(spinPivot);
+  orbitPivot.add(moon.group);             // the moon spins on its own axis, tier-aware
   scene.add(orbitPivot);
   moon.group.position.set(0, 0, 0);
   moon.group.rotation.set(0, 0, 0);
-  moon.group.scale.setScalar(T.MOON_R / 151); // baked at r=151 → cinematic 16.4
+  // The engine moon is baked at r=151; the cinematic Moon is 16.4 units.
+  // Prefer the moon API so its projection state stays in sync with the
+  // render (the host feeds projectedDisc() to the film-grain mask); the
+  // group scale is still set so the visual size is right either way.
+  if (typeof moon.setMoonScale === 'function') moon.setMoonScale(T.MOON_R / 151);
+  moon.group.scale.setScalar(T.MOON_R / 151);
+  // Scratch vector for the disc-tier billboard below (no per-frame alloc).
+  const camWorld = new THREE.Vector3();
   // Dramatic side-light for the documentary Moon (overrides the host's full-moon rig).
   {
     const sunDir = new THREE.Vector3(0.75, 0.38, 0.55).normalize();
@@ -314,11 +370,33 @@ export function decorateTidal({ moon, env, post, postm, camera, scene, renderer,
 
     // Moon on its (widening) orbit.
     orbitPivot.position.set(st.moonX, 0, st.moonZ);
-    // The spin — plus post-lock libration.
-    spinPivot.rotation.y = -(st.spinAngle + st.libration);
-    // Tidal bulges ride the Earth line with the friction lag.
-    // (+X toward Earth at rotation.y = π − orbitAngle; lag added on top.)
-    bulgeGroup.rotation.y = Math.PI - st.orbitAngle + st.bulgeLag;
+    // The spin — plus post-lock libration. The gold marker rides the
+    // spinPivot; the moon itself spins tier-aware: the engine's
+    // 'efficient'/'still' tiers render the Moon as a flat camera-facing disc
+    // (CircleGeometry), and rotating a parent would turn that disc edge-on.
+    // So the disc is re-billboarded every frame and spun in-plane instead,
+    // while the sphere tiers rotate normally.
+    const spin = st.spinAngle + st.libration;
+    spinPivot.rotation.y = -spin;
+    let disc = null;
+    moon.group.traverse((o) => {
+      if (disc || !o.isMesh || !o.geometry || !o.geometry.isCircleGeometry) return;
+      let p = o, vis = true;
+      while (p && p !== scene) { if (!p.visible) { vis = false; break; } p = p.parent; }
+      if (vis) disc = o;
+    });
+    if (disc) {
+      camera.getWorldPosition(camWorld);
+      disc.lookAt(camWorld);   // +Z (the disc normal) faces the camera…
+      disc.rotateZ(spin);      // …and the surface turns in-plane with the spin
+      moon.group.rotation.set(0, 0, 0);
+    } else {
+      moon.group.rotation.y = -spin;
+    }
+    // Tidal bulges ride the Earth line with the friction lag — the bulge
+    // LEADS (see bulgeRotationY): Earth's pull on the leading bulge is the
+    // braking torque.
+    bulgeGroup.rotation.y = bulgeRotationY(st);
     const pulse = 1 + st.lockPulse * 0.55;
     const bAmp = st.bulgeAmp * pulse;
     bulgeNear.scale.set(T.MOON_R * 0.42 * bAmp, T.MOON_R * 0.30 * bAmp, T.MOON_R * 0.30 * bAmp);
