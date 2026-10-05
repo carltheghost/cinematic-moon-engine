@@ -18,7 +18,8 @@ with analytic atmosphere and tiered bloom, played through scroll-driven chapters
   `index.html` behind any local static server. No build step, no server, no
   network calls at runtime.
 
-Two scenes ship (`scenes/eclipse`, `scenes/mimas`). Implementation phases 1–7
+Three scenes ship (`scenes/eclipse`, `scenes/mimas`, `scenes/tidallock` —
+the tidal-locking act, `?scene=tidal-lock`). Implementation phases 1–7
 are done with the harness checks in `harness/`; adding scenes and chapters is
 the open extension surface (see `docs/scene-extension.md`).
 
