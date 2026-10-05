@@ -11,6 +11,12 @@
  *   'tidal-lock'  → "How the Moon Became Tidally Locked" (LAZY: dynamic
  *                   import; the loader composes the injected bone-neutral
  *                   color script via the config's pure transform)
+ *   'formation'   → "How the Moon Was Born" — the giant-impact act (LAZY;
+ *                   white-hot → gray palette via the pure transform)
+ *   'eclipses'    → "Chasing Shadows" — eclipse geometry: umbra cones,
+ *                   corona, diamond ring, blood moon (LAZY)
+ *   'phases'      → "The Faces of the Moon" — one synodic month, nine
+ *                   chapters, Earth-viewer telephoto (LAZY)
  */
 import { registerSceneLoader } from '../engine/scene.js';
 import { MIMAS_SCENE } from './mimas/mimas-scene.js';
@@ -38,5 +44,38 @@ registerSceneLoader('tidal-lock', async () => {
     // moon palette is derived from the frozen COLOR_SCRIPT by the config's
     // pure makeTidalColorScript transform.
     colorScript: cfg.makeTidalColorScript(moonm.COLOR_SCRIPT),
+  };
+});
+
+registerSceneLoader('formation', async () => {
+  const cfg = await import('./formation/formation-config.js');
+  const moonm = await import('../engine/moon.js');
+  return {
+    ...cfg.FORMATION_SCENE,
+    // The formation act's white-hot → gray palette is derived from the
+    // frozen COLOR_SCRIPT by the config's pure makeFormationColorScript.
+    colorScript: cfg.makeFormationColorScript(moonm.COLOR_SCRIPT),
+  };
+});
+
+registerSceneLoader('eclipses', async () => {
+  const cfg = await import('./eclipses/eclipses-config.js');
+  const moonm = await import('../engine/moon.js');
+  return {
+    ...cfg.ECLIPSE_SCENE,
+    // Dimmed totality + blood-reddened frame, derived from the frozen
+    // COLOR_SCRIPT by the config's pure makeEclipseColorScript.
+    colorScript: cfg.makeEclipseColorScript(moonm.COLOR_SCRIPT),
+  };
+});
+
+registerSceneLoader('phases', async () => {
+  const cfg = await import('./phases/phases-config.js');
+  const moonm = await import('../engine/moon.js');
+  return {
+    ...cfg.PHASES_SCENE,
+    // Neutral bone, a breath brighter at full — derived from the frozen
+    // COLOR_SCRIPT by the config's pure makePhasesColorScript.
+    colorScript: cfg.makePhasesColorScript(moonm.COLOR_SCRIPT),
   };
 });
