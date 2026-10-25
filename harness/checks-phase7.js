@@ -24,7 +24,7 @@
  *      that auto-mode records can fail resolved-tier comparison elsewhere;
  *      docs/scene-extension.md carries the advisory section.
  * P77. ECLIPSE ACT THROUGH THE MAIN PAGE (?scene=eclipse-act): boots clean,
- *      scene id + injected color script + blood-moon hook engaged,
+ *      sceneId + live THREE.Scene + injected color script + blood-moon hook engaged,
  *      renderFrame(156) deterministic, disc-center strongly red, frame
  *      differs from the canonical scene (config-driven).
  *
@@ -304,7 +304,8 @@ async function main() {
         const cme = window.__cme;
         const e = cme;
         const out = {
-          scene: e.scene,
+          sceneId: e.sceneId,
+          sceneIsScene: !!e.scene && e.scene.isScene === true,
           eclipse: e.moon.eclipse,
           injectedScript: e.moon.colorScript !== e.moonm.COLOR_SCRIPT,
           chapters: e.sceneConfig.chapters.length,
@@ -329,9 +330,10 @@ async function main() {
         return { ...out, px: p1 };
       })()`);
       const eclipseSha = sha(r.px);
-      check('P77b. scene id + injected color script + blood-moon hook',
-        r.scene === 'eclipse-act' && r.eclipse === 1 && r.injectedScript === true && r.chapters === 13,
-        `scene=${r.scene} eclipse=${r.eclipse} injected=${r.injectedScript} chapters=${r.chapters}`);
+      check('P77b. THREE.Scene + sceneId + injected color script + blood-moon hook',
+        r.sceneIsScene === true && r.sceneId === 'eclipse-act' && r.eclipse === 1 &&
+          r.injectedScript === true && r.chapters === 13,
+        `sceneIsScene=${r.sceneIsScene} sceneId=${r.sceneId} eclipse=${r.eclipse} injected=${r.injectedScript} chapters=${r.chapters}`);
       check('P77c. renderFrame(156) deterministic (maxDelta=0)', r.detMaxDelta === 0, `maxDelta=${r.detMaxDelta}`);
       const rb = r.discR - r.discB;
       check('P77d. blood-moon visual: disc-center strongly red', rb > 20,

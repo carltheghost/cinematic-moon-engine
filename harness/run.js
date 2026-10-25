@@ -19,9 +19,9 @@
  * limit; never run concurrent Chromium instances from this harness).
  *
  * file:// first: Chromium blocks ESM over file:// unless
- * --allow-file-access-from-files is passed, so we launch with that flag. If
- * boot still fails on file://, we fall back to a loopback static server
- * (python3 -m http.server) and mark the result `httpFallback: true`.
+ * --allow-file-access-from-files is passed, so we launch with that flag.
+ * Only recognized unsupported-file-transport errors may use the owned
+ * loopback fallback. Explicit administrator/security denials stop the run.
  */
 'use strict';
 
@@ -29,8 +29,7 @@ const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
-const http = require('node:http');
-const net = require('node:net');
+const { runFileViewportWithFallback, startHttpServer, stopHttpServer } = require('./fallback');
 
 const ROOT = path.resolve(__dirname, '..');
 const INDEX = path.join(ROOT, 'index.html');
@@ -78,59 +77,12 @@ async function ensureChromium(pw) {
   }
 }
 
-async function startHttpServer() {
-  // Ask the OS for an unused loopback port so an earlier run or another local
-  // service cannot make the fallback probe an unrelated server.
-  const port = await new Promise((resolve, reject) => {
-    const reservation = net.createServer();
-    reservation.once('error', reject);
-    reservation.listen(0, '127.0.0.1', () => {
-      const selected = reservation.address().port;
-      reservation.close((err) => (err ? reject(err) : resolve(selected)));
-    });
-  });
-  const proc = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', ROOT],
-    { stdio: 'ignore' });
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const timer = setTimeout(() => {
-      if (settled) return;
-      settled = true;
-      proc.kill();
-      reject(new Error('http.server did not start'));
-    }, 8000);
-    const probe = () => {
-      if (settled) return;
-      const req = http.get({ hostname: '127.0.0.1', port, path: '/', timeout: 500 }, (res) => {
-        res.resume();
-        settled = true;
-        clearTimeout(timer);
-        resolve({ proc, port });
-      });
-      req.on('timeout', () => req.destroy());
-      req.on('error', () => { if (!settled) setTimeout(probe, 50); });
-    };
-    proc.on('error', (e) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(e);
-    });
-    proc.on('close', (code) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      reject(new Error(`http.server exited with code ${code}`));
-    });
-    probe();
-  });
-}
-
 async function testViewport(pw, vp, url, viaFile) {
   const result = {
     viewport: vp.name, urlKind: viaFile ? 'file://' : 'http://127.0.0.1 (fallback)',
     boot: false, consoleErrors: -1, tierDecision: null, hudLines: 0,
     determinism: null, selfTest: null, screenshot: null, error: null,
+    navigationError: null, requestFailures: [],
   };
   const browser = await pw.chromium.launch({
     headless: true,
@@ -142,18 +94,22 @@ async function testViewport(pw, vp, url, viaFile) {
       isMobile: vp.isMobile, hasTouch: vp.hasTouch,
     });
     const consoleErrors = [];
+    const requestFailures = [];
     page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
     page.on('pageerror', (e) => consoleErrors.push('PAGEERROR: ' + (e && e.message)));
+    page.on('requestfailed', (request) => {
+      const failure = request.failure();
+      requestFailures.push(`${request.url()}: ${(failure && failure.errorText) || 'request failed'}`);
+    });
 
     try {
       await page.goto(url, { waitUntil: 'load', timeout: 30000 });
     } catch (e) {
-      // Some managed Chromium builds reject file:// navigation before the
-      // page can load. Return a normal failed-boot result so main() can use
-      // its documented loopback fallback instead of aborting the harness.
-      result.error = 'navigation failed: ' + String((e && e.message) || e).slice(0, 180);
+      result.navigationError = String((e && e.message) || e).slice(0, 500);
+      result.error = 'navigation failed: ' + result.navigationError.slice(0, 180);
       result.consoleErrors = consoleErrors.length;
       result.consoleErrorText = consoleErrors.slice(0, 10);
+      result.requestFailures = requestFailures.slice(0, 10);
       return result;
     }
     try {
@@ -168,6 +124,7 @@ async function testViewport(pw, vp, url, viaFile) {
 
     result.consoleErrors = consoleErrors.length;
     result.consoleErrorText = consoleErrors.slice(0, 10);
+    result.requestFailures = requestFailures.slice(0, 10);
     result.tierDecision = await page.evaluate('window.__cmeTierDecision').catch(() => null);
     result.hudLines = await page.evaluate('(window.__cmeHudLog||[]).length').catch(() => 0);
     result.hudLog = await page.evaluate('(window.__cmeHudLog||[]).slice(-8)').catch(() => []);
@@ -229,45 +186,64 @@ async function main() {
   const fileUrl = pathToFileURL(INDEX).href + '?seed=7';
   let httpServer = null;
   const results = [];
+  const getHttpServer = async () => {
+    if (!httpServer) httpServer = await startHttpServer();
+    return httpServer;
+  };
 
-  for (const vp of VIEWPORTS) {
-    console.log(`\n--- ${vp.name} (${vp.width}×${vp.height}) ---`);
-    let r = await testViewport(pw, vp, fileUrl, true);
-    if (!r.boot) {
-      console.log(`file:// boot failed (${r.error}); falling back to loopback http server…`);
-      if (!httpServer) httpServer = await startHttpServer();
-      const httpUrl = `http://127.0.0.1:${httpServer.port}/index.html?seed=7`;
-      r = await testViewport(pw, vp, httpUrl, false);
-      r.httpFallback = true;
+  try {
+    for (let i = 0; i < VIEWPORTS.length; i++) {
+      const vp = VIEWPORTS[i];
+      console.log(`\n--- ${vp.name} (${vp.width}×${vp.height}) ---`);
+      const r = await runFileViewportWithFallback({
+        pw, viewport: vp, fileUrl, testViewport, getHttpServer,
+      });
+      results.push(r);
+      if (r.policyDenied) {
+        console.error(`STOP: explicit file:// policy/security denial; no alternate protocol attempted: ${r.policyDenial}`);
+      } else if (r.httpFallback) {
+        console.log(`ordinary unsupported file loading (${r.fallbackReason}); used verified loopback fallback`);
+      } else if (!r.boot && r.fallbackAttempted === false) {
+        console.log(`no loopback fallback: ${r.fallbackSkippedReason || r.error || 'failure was not an approved file-transport limitation'}`);
+      }
+      console.log(`boot: ${r.boot ? 'PASS' : 'FAIL'}  console errors: ${r.consoleErrors}`);
+      console.log(`tier decision: ${r.tierDecision ? 'LOGGED — ' + r.tierDecision : 'MISSING'}`);
+      console.log(`determinism(seed 7): ${r.determinism && r.determinism.pass ? 'PASS' : 'FAIL'} ` +
+        `(max luma Δ=${r.determinism && r.determinism.maxLumaDelta != null ? r.determinism.maxLumaDelta.toFixed(3) : 'n/a'})`);
+      console.log(`scene determinism: ${r.sceneDeterminism && r.sceneDeterminism.pass ? 'PASS' : 'FAIL'} ` +
+        `(max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta != null ? r.sceneDeterminism.maxLumaDelta.toFixed(3) : 'n/a'})`);
+      if (r.phase1) {
+        const p = r.phase1;
+        console.log(`bloom isolation: ${p.bloom && p.bloom.pass ? 'PASS' : 'FAIL'} ` +
+          `(outside/moon=${p.bloom && p.bloom.ratio != null ? (p.bloom.ratio * 100).toFixed(3) + '%' : 'n/a'})`);
+        console.log(`grade sampling: ${p.grade && p.grade.pass ? 'PASS' : 'FAIL'}`);
+        console.log(`sky ceiling: ${p.sky && p.sky.pass ? 'PASS' : 'FAIL'} ` +
+          `(max=${p.sky ? p.sky.maxR + ',' + p.sky.maxG + ',' + p.sky.maxB : 'n/a'} fogIdentity=${p.sky && p.sky.fogIdentity})`);
+        console.log(`perf: ${p.perf ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
+      }
+      console.log(`conformance selfTest: ${r.selfTest && r.selfTest.pass ? 'PASS' : 'FAIL'}`);
+
+      if (r.policyDenied) {
+        for (const skipped of VIEWPORTS.slice(i + 1)) {
+          results.push({
+            viewport: skipped.name, urlKind: 'not attempted', boot: false, consoleErrors: 0,
+            skipped: true, error: `not attempted after policy/security denial on ${vp.name}`,
+          });
+        }
+        break;
+      }
     }
-    results.push(r);
-    console.log(`boot: ${r.boot ? 'PASS' : 'FAIL'}  console errors: ${r.consoleErrors}`);
-    console.log(`tier decision: ${r.tierDecision ? 'LOGGED — ' + r.tierDecision : 'MISSING'}`);
-    console.log(`determinism(seed 7): ${r.determinism && r.determinism.pass ? 'PASS' : 'FAIL'} ` +
-      `(max luma Δ=${r.determinism && r.determinism.maxLumaDelta != null ? r.determinism.maxLumaDelta.toFixed(3) : 'n/a'})`);
-    console.log(`scene determinism: ${r.sceneDeterminism && r.sceneDeterminism.pass ? 'PASS' : 'FAIL'} ` +
-      `(max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta != null ? r.sceneDeterminism.maxLumaDelta.toFixed(3) : 'n/a'})`);
-    if (r.phase1) {
-      const p = r.phase1;
-      console.log(`bloom isolation: ${p.bloom && p.bloom.pass ? 'PASS' : 'FAIL'} ` +
-        `(outside/moon=${p.bloom && p.bloom.ratio != null ? (p.bloom.ratio * 100).toFixed(3) + '%' : 'n/a'})`);
-      console.log(`grade sampling: ${p.grade && p.grade.pass ? 'PASS' : 'FAIL'}`);
-      console.log(`sky ceiling: ${p.sky && p.sky.pass ? 'PASS' : 'FAIL'} ` +
-        `(max=${p.sky ? p.sky.maxR + ',' + p.sky.maxG + ',' + p.sky.maxB : 'n/a'} fogIdentity=${p.sky && p.sky.fogIdentity})`);
-      console.log(`perf: ${p.perf ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
-    }
-    console.log(`conformance selfTest: ${r.selfTest && r.selfTest.pass ? 'PASS' : 'FAIL'}`);
+  } finally {
+    await stopHttpServer(httpServer);
   }
-
-  if (httpServer) httpServer.proc.kill();
 
   // ---- report ----
   console.log('\n=== PHASE 1 EXIT REPORT ===');
   const rows = [];
   const add = (check, pass, detail) => rows.push({ check, pass: !!pass, detail });
   for (const r of results) {
-    add(`(a) boot offline, zero console errors — ${r.viewport}`, r.boot && r.consoleErrors === 0,
-      `boot=${r.boot} errors=${r.consoleErrors} via=${r.urlKind}${r.httpFallback ? ' [FALLBACK]' : ''}` +
+    add(`(a) boot, zero console errors — ${r.viewport}`, !r.skipped && r.boot && r.consoleErrors === 0,
+      r.skipped ? r.error : `boot=${r.boot} errors=${r.consoleErrors} via=${r.urlKind}${r.httpFallback ? ' [HTTP FALLBACK]' : ''}` +
       (r.consoleErrorText && r.consoleErrorText.length ? ` first: ${r.consoleErrorText[0]}` : ''));
   }
   for (const r of results) {
