@@ -29,6 +29,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
+const http = require('node:http');
+const net = require('node:net');
 
 const ROOT = path.resolve(__dirname, '..');
 const INDEX = path.join(ROOT, 'index.html');
@@ -76,20 +78,51 @@ async function ensureChromium(pw) {
   }
 }
 
-function startHttpServer() {
-  const port = 8931;
-  const proc = spawn('python3', ['-m', 'http.server', String(port), '--directory', ROOT],
-    { stdio: ['ignore', 'pipe', 'pipe'] });
+async function startHttpServer() {
+  // Ask the OS for an unused loopback port so an earlier run or another local
+  // service cannot make the fallback probe an unrelated server.
+  const port = await new Promise((resolve, reject) => {
+    const reservation = net.createServer();
+    reservation.once('error', reject);
+    reservation.listen(0, '127.0.0.1', () => {
+      const selected = reservation.address().port;
+      reservation.close((err) => (err ? reject(err) : resolve(selected)));
+    });
+  });
+  const proc = spawn('python3', ['-m', 'http.server', String(port), '--bind', '127.0.0.1', '--directory', ROOT],
+    { stdio: 'ignore' });
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('http.server did not start')), 8000);
-    proc.stderr.on('data', (d) => {
-      if (/Serving HTTP/.test(String(d))) { clearTimeout(timer); resolve({ proc, port }); }
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      proc.kill();
+      reject(new Error('http.server did not start'));
+    }, 8000);
+    const probe = () => {
+      if (settled) return;
+      const req = http.get({ hostname: '127.0.0.1', port, path: '/', timeout: 500 }, (res) => {
+        res.resume();
+        settled = true;
+        clearTimeout(timer);
+        resolve({ proc, port });
+      });
+      req.on('timeout', () => req.destroy());
+      req.on('error', () => { if (!settled) setTimeout(probe, 50); });
+    };
+    proc.on('error', (e) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(e);
     });
-    proc.on('error', (e) => { clearTimeout(timer); reject(e); });
-    // stdout variant for some python versions
-    proc.stdout.on('data', (d) => {
-      if (/Serving HTTP/.test(String(d))) { clearTimeout(timer); resolve({ proc, port }); }
+    proc.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(`http.server exited with code ${code}`));
     });
+    probe();
   });
 }
 
@@ -112,7 +145,17 @@ async function testViewport(pw, vp, url, viaFile) {
     page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
     page.on('pageerror', (e) => consoleErrors.push('PAGEERROR: ' + (e && e.message)));
 
-    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    try {
+      await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    } catch (e) {
+      // Some managed Chromium builds reject file:// navigation before the
+      // page can load. Return a normal failed-boot result so main() can use
+      // its documented loopback fallback instead of aborting the harness.
+      result.error = 'navigation failed: ' + String((e && e.message) || e).slice(0, 180);
+      result.consoleErrors = consoleErrors.length;
+      result.consoleErrorText = consoleErrors.slice(0, 10);
+      return result;
+    }
     try {
       await page.waitForFunction('window.__cmeBoot === true', null, { timeout: BOOT_TIMEOUT_MS });
       result.boot = true;

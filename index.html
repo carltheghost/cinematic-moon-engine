@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Cinematic Moon Engine — Phase 3 (environment)</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Ccircle cx=%2232%22 cy=%2232%22 r=%2228%22 fill=%22%23e0552b%22/%3E%3Cpath d=%22M37 8a25 25 0 1 0 19 39A27 27 0 0 1 37 8%22 fill=%22%23030507%22/%3E%3C/svg%3E">
 <style>
   html, body { margin: 0; height: 100%; background: #030507; }
   #app { position: fixed; inset: 0; z-index: 1; }
@@ -480,7 +481,7 @@ window.__cme = {
   sampleChapterFrom: chaptersm.sampleChapterFrom, // Phase 7: scene-parameterized sampler
   createCamera, // Phase 7: exposed for harness locator-injection checks
   SIM_DURATION: sceneCfg.simDuration, // Phase 7: scene clock (312 canonical)
-  scene: sceneCfg.id, // Phase 7: the active scene id (?scene=)
+  sceneId: sceneCfg.id, // Phase 7: the active scene id (?scene=)
   sceneConfig: sceneCfg, // Phase 7: the resolved scene config
   bakeResPin: BAKE_RES_PIN, // Phase 7: ?bakeRes= pin (0 = production budget behavior)
   get bakeResolution() { return resolution; }, // Phase 7: actual bake res (2048 or 1024 fallback)

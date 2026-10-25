@@ -41,10 +41,11 @@ launched with `--allow-file-access-from-files` — `run.js` does this, so the
 Phase 0 exit check "boots offline from `file://`" is exercised for real, with
 no network involved.
 
-If `file://` boot ever fails (e.g. a future Chromium change), `run.js` falls
-back to a loopback static server (`python3 -m http.server` on 127.0.0.1:8931)
-and marks the result `httpFallback: true` in the report. The import map uses
-relative URLs, so the page is identical under both schemes.
+If `file://` boot ever fails (e.g. a managed Chromium policy rejects file
+navigation), `run.js` falls back to a loopback static server (`python3 -m
+http.server`) on an available port and probes it before navigating. It marks
+the result `httpFallback: true` in the report. The import map uses relative
+URLs, so the page is identical under both schemes.
 
 For a human double-clicking `index.html`: most Chromium builds need
 `--allow-file-access-from-files` too; any static server (`python3 -m
