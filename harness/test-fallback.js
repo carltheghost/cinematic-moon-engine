@@ -10,6 +10,7 @@ const {
   classifyFileNavigationFailure,
   createStaticHandler,
   runFileViewportWithFallback,
+  runViewportSequence,
   startHttpServer,
   stopHttpServer,
 } = require('./fallback');
@@ -117,6 +118,69 @@ async function testFallbackControlFlow() {
   });
   equal(successfulFile.boot, true, 'working file navigation is kept');
   equal(successfulStarts, 0, 'working file navigation does not start a server');
+}
+
+async function testPolicyDenialStopsAllViewports() {
+  const viewports = [
+    { name: 'desktop', width: 1440, height: 900 },
+    { name: 'mobile', width: 390, height: 844 },
+  ];
+  const adminDenial = 'net::ERR_BLOCKED_BY_ADMINISTRATOR';
+
+  const bootAndDenialNavigations = [];
+  const bootAndDenialViewports = [];
+  let bootAndDenialServerStarts = 0;
+  const bootAndDenialResults = await runViewportSequence(viewports, async (vp) => {
+    bootAndDenialViewports.push(vp.name);
+    return runFileViewportWithFallback({
+      pw, viewport: vp, fileUrl,
+      testViewport: async (_pw, _vp, url, viaFile) => {
+        bootAndDenialNavigations.push({ viewport: vp.name, url, viaFile });
+        return {
+          boot: true,
+          consoleErrors: 0,
+          requestFailures: [`${url}: ${adminDenial}`],
+        };
+      },
+      getHttpServer: async () => { bootAndDenialServerStarts++; return { port: 45678 }; },
+    });
+  });
+  deepEqual(bootAndDenialViewports, ['desktop'], 'boot plus denial stops before another viewport starts');
+  deepEqual(bootAndDenialNavigations, [{ viewport: 'desktop', url: fileUrl, viaFile: true }],
+    'contradictory boot plus file denial performs no fallback or second viewport navigation');
+  equal(bootAndDenialServerStarts, 0, 'contradictory boot plus denial never starts the fallback server');
+  equal(bootAndDenialResults[0].policyDenied, true, 'denial outranks a contradictory successful boot flag');
+  equal(bootAndDenialResults[1].skipped, true, 'later viewport is explicitly marked skipped');
+
+  const httpDenialNavigations = [];
+  const httpDenialViewports = [];
+  let httpDenialServerStarts = 0;
+  const httpDenialResults = await runViewportSequence(viewports, async (vp) => {
+    httpDenialViewports.push(vp.name);
+    return runFileViewportWithFallback({
+      pw, viewport: vp, fileUrl,
+      testViewport: async (_pw, _vp, url, viaFile) => {
+        httpDenialNavigations.push({ viewport: vp.name, url, viaFile });
+        return viaFile
+          ? { boot: false, navigationError: 'net::ERR_UNKNOWN_URL_SCHEME', error: 'unsupported file transport' }
+          : { boot: true, consoleErrors: 0, consoleErrorText: [`resource blocked by security policy: ${adminDenial}`] };
+      },
+      getHttpServer: async () => { httpDenialServerStarts++; return { port: 45678 }; },
+    });
+  });
+  deepEqual(httpDenialViewports, ['desktop'], 'HTTP policy denial stops before another viewport starts');
+  deepEqual(httpDenialNavigations, [
+    { viewport: 'desktop', url: fileUrl, viaFile: true },
+    { viewport: 'desktop', url: 'http://127.0.0.1:45678/index.html?seed=7', viaFile: false },
+  ], 'HTTP denial is classified and no later viewport is navigated');
+  equal(httpDenialServerStarts, 1, 'eligible unsupported-file result starts only its one local server');
+  equal(httpDenialResults[0].policyDenied, true, 'HTTP policy evidence marks the entire run denied');
+  equal(httpDenialResults[0].policyDenial.includes(adminDenial), true,
+    'HTTP policy denial retains the original denial text');
+  equal(httpDenialResults[0].httpFallback, true, 'the denied HTTP route is identified in the result');
+  equal(httpDenialResults[0].fallbackAttempted, true, 'the result records that the ordinary fallback had begun');
+  equal(httpDenialResults[0].boot, true, 'contradictory HTTP boot state is retained for diagnosis');
+  equal(httpDenialResults[1].skipped, true, 'viewport after HTTP denial is explicitly marked skipped');
 }
 
 function fakeServer(port, onListen = true) {
@@ -264,18 +328,28 @@ async function testStaticHandler() {
 
 function testProductionWiring() {
   const runSource = fs.readFileSync(path.join(__dirname, 'run.js'), 'utf8');
+  const fallbackSource = fs.readFileSync(path.join(__dirname, 'fallback.js'), 'utf8');
   equal(/runFileViewportWithFallback/.test(runSource), true,
     'the Phase 1 runner uses the classified fallback controller');
   equal(/page\.on\('requestfailed'/.test(runSource), true,
     'request-level policy evidence is captured for classification');
-  equal(/if \(r\.policyDenied\) \{[\s\S]*?VIEWPORTS\.slice\(i \+ 1\)[\s\S]*?break;/.test(runSource), true,
-    'an explicit denial stops later viewport navigations');
+  equal(/runViewportSequence\(VIEWPORTS/.test(runSource), true,
+    'the Phase 1 runner uses the policy-stop viewport controller');
+  equal(/if \(result\.policyDenied\) \{[\s\S]*?viewports\.slice\(i \+ 1\)[\s\S]*?break;/.test(fallbackSource), true,
+    'an explicit denial stops all later viewport navigations');
   equal(/finally \{\s*await stopHttpServer\(httpServer\);\s*\}/.test(runSource), true,
     'the loopback server is shut down in a bounded-lifecycle cleanup path');
+  equal(/buildPhase1ExitReport\(results, gate\)/.test(runSource), true,
+    'the runner routes all outcomes through the structured no-probe-safe exit report');
+  equal(/policyDenialEvidence\(fileResult\)[\s\S]*?if \(fileResult\.boot\)/.test(fallbackSource), true,
+    'file-route policy evidence is checked before the boot-success shortcut');
+  equal(/policyDenialEvidence\(result\)/.test(fallbackSource), true,
+    'fallback-route policy evidence is classified too');
 }
 
 (async () => {
   await testFallbackControlFlow();
+  await testPolicyDenialStopsAllViewports();
   await testOwnedServerReadiness();
   await testStaticHandler();
   testProductionWiring();

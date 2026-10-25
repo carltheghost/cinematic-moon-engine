@@ -29,7 +29,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
-const { runFileViewportWithFallback, startHttpServer, stopHttpServer } = require('./fallback');
+const { runFileViewportWithFallback, runViewportSequence, startHttpServer, stopHttpServer } = require('./fallback');
+const { buildPhase1ExitReport } = require('./phase1-report');
 
 const ROOT = path.resolve(__dirname, '..');
 const INDEX = path.join(ROOT, 'index.html');
@@ -185,22 +186,21 @@ async function main() {
 
   const fileUrl = pathToFileURL(INDEX).href + '?seed=7';
   let httpServer = null;
-  const results = [];
   const getHttpServer = async () => {
     if (!httpServer) httpServer = await startHttpServer();
     return httpServer;
   };
 
+  let results;
   try {
-    for (let i = 0; i < VIEWPORTS.length; i++) {
-      const vp = VIEWPORTS[i];
+    results = await runViewportSequence(VIEWPORTS, async (vp) => {
       console.log(`\n--- ${vp.name} (${vp.width}×${vp.height}) ---`);
-      const r = await runFileViewportWithFallback({
+      return runFileViewportWithFallback({
         pw, viewport: vp, fileUrl, testViewport, getHttpServer,
       });
-      results.push(r);
+    }, (r) => {
       if (r.policyDenied) {
-        console.error(`STOP: explicit file:// policy/security denial; no alternate protocol attempted: ${r.policyDenial}`);
+        console.error(`STOP: explicit policy/security denial; no later navigation will be attempted: ${r.policyDenial}`);
       } else if (r.httpFallback) {
         console.log(`ordinary unsupported file loading (${r.fallbackReason}); used verified loopback fallback`);
       } else if (!r.boot && r.fallbackAttempted === false) {
@@ -219,68 +219,19 @@ async function main() {
         console.log(`grade sampling: ${p.grade && p.grade.pass ? 'PASS' : 'FAIL'}`);
         console.log(`sky ceiling: ${p.sky && p.sky.pass ? 'PASS' : 'FAIL'} ` +
           `(max=${p.sky ? p.sky.maxR + ',' + p.sky.maxG + ',' + p.sky.maxB : 'n/a'} fogIdentity=${p.sky && p.sky.fogIdentity})`);
-        console.log(`perf: ${p.perf ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
+        console.log(`perf: ${p.perf && Number.isFinite(p.perf.msPerFrame) ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
       }
       console.log(`conformance selfTest: ${r.selfTest && r.selfTest.pass ? 'PASS' : 'FAIL'}`);
-
-      if (r.policyDenied) {
-        for (const skipped of VIEWPORTS.slice(i + 1)) {
-          results.push({
-            viewport: skipped.name, urlKind: 'not attempted', boot: false, consoleErrors: 0,
-            skipped: true, error: `not attempted after policy/security denial on ${vp.name}`,
-          });
-        }
-        break;
-      }
-    }
+    });
   } finally {
     await stopHttpServer(httpServer);
   }
 
   // ---- report ----
   console.log('\n=== PHASE 1 EXIT REPORT ===');
-  const rows = [];
-  const add = (check, pass, detail) => rows.push({ check, pass: !!pass, detail });
-  for (const r of results) {
-    add(`(a) boot, zero console errors — ${r.viewport}`, !r.skipped && r.boot && r.consoleErrors === 0,
-      r.skipped ? r.error : `boot=${r.boot} errors=${r.consoleErrors} via=${r.urlKind}${r.httpFallback ? ' [HTTP FALLBACK]' : ''}` +
-      (r.consoleErrorText && r.consoleErrorText.length ? ` first: ${r.consoleErrorText[0]}` : ''));
-  }
-  for (const r of results) {
-    const p = r.phase1 || {};
-    const bl = p.bloom || {};
-    add(`(b) bloom isolation <2% — ${r.viewport}`, bl.pass,
-      bl.error || bl.skipped || `outside/moon=${(bl.ratio * 100).toFixed(3)}% (E_in=${bl.eIn.toFixed(1)} E_far=${bl.eFar.toFixed(3)})`);
-    const g = p.grade || {};
-    const gd = (name, s) => `${name}: ${s && s.pass ? 'PASS' : 'FAIL'}`;
-    add(`(c) grade sampling — ${r.viewport}`, g.pass,
-      g.error || ['black', 'midtoneGrain', 'vignette', 'moonGrain'].map((k) => {
-        const s = g[k] || {};
-        const v = k === 'black' ? `rms=${(s.rms || 0).toFixed(4)}`
-          : k === 'midtoneGrain' ? `rms=${(s.rms || 0).toFixed(3)}`
-          : k === 'vignette' ? `dark=${((s.cornerDarkening || 0) * 100).toFixed(1)}% onset=${(s.onset || 0).toFixed(3)}`
-          : `rms=${(s.rms || 0).toFixed(4)}`;
-        return `${gd(k, s)}(${v})`;
-      }).join(' '));
-    const sk = p.sky || {};
-    add(`(d) sky ≤ #16202F beyond halo, fog identity — ${r.viewport}`, sk.pass,
-      sk.error || `max=${sk.maxR},${sk.maxG},${sk.maxB} (ceiling 22,32,47) halo[4-8r]=${(sk.haloMax4812 || []).join(',')} fogIdentity=${sk.fogIdentity}`);
-    const pf = p.perf || {};
-    add(`(e) perf proxy ≤33 ms — ${r.viewport}`, pf.passProxy,
-      pf.error || `${pf.msPerFrame.toFixed(2)} ms/frame (tier=${pf.tier}, stars=${pf.stars}) — ${pf.note}`);
-    add(`(f) scene determinism (seed 7) — ${r.viewport}`, !!(r.sceneDeterminism && r.sceneDeterminism.pass),
-      r.sceneDeterminism && r.sceneDeterminism.error ? r.sceneDeterminism.error
-        : `frame=${r.sceneDeterminism && r.sceneDeterminism.frame} max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta}`);
-  }
-  add('(g) grep gate', gate.pass, gate.output.split('\n')[0]);
-
-  let allPass = true;
-  for (const row of rows) {
-    console.log(`${row.pass ? 'PASS' : 'FAIL'}  ${row.check}\n      ${row.detail}`);
-    if (!row.pass) allPass = false;
-  }
-  console.log(allPass ? '\nALL CHECKS PASSED' : '\nSOME CHECKS FAILED');
-  process.exit(allPass ? 0 : 1);
+  const exitReport = buildPhase1ExitReport(results, gate);
+  console.log(exitReport.text);
+  process.exit(exitReport.allPass ? 0 : 1);
 }
 
 main().catch((e) => { console.error('harness fatal:', e); process.exit(2); });

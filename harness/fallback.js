@@ -236,12 +236,11 @@ async function stopHttpServer(serverInfo, timeoutMs = 1500) {
 
 async function runFileViewportWithFallback({ pw, viewport, fileUrl, testViewport, getHttpServer }) {
   const fileResult = await testViewport(pw, viewport, fileUrl, true);
-  if (fileResult.boot) return fileResult;
-
   const policyDenial = policyDenialEvidence(fileResult);
   if (policyDenial) {
     return { ...fileResult, policyDenied: true, policyDenial, fallbackAttempted: false };
   }
+  if (fileResult.boot) return fileResult;
 
   if (classifyFileNavigationFailure(fileResult.navigationError) !== 'ordinary-unsupported-file') {
     return { ...fileResult, fallbackAttempted: false };
@@ -264,7 +263,42 @@ async function runFileViewportWithFallback({ pw, viewport, fileUrl, testViewport
   const pathname = filePath.split(path.sep).map(encodeURIComponent).join('/');
   const httpUrl = `http://127.0.0.1:${server.port}/${pathname}${fileLocation.search}${fileLocation.hash}`;
   const result = await testViewport(pw, viewport, httpUrl, false);
+  const fallbackPolicyDenial = policyDenialEvidence(result);
+  if (fallbackPolicyDenial) {
+    return {
+      ...result,
+      httpFallback: true,
+      fallbackReason: fileResult.navigationError,
+      fallbackAttempted: true,
+      policyDenied: true,
+      policyDenial: fallbackPolicyDenial,
+    };
+  }
   return { ...result, httpFallback: true, fallbackReason: fileResult.navigationError };
+}
+
+async function runViewportSequence(viewports, runViewport, onResult = async () => {}) {
+  const results = [];
+  for (let i = 0; i < viewports.length; i++) {
+    const viewport = viewports[i];
+    const result = await runViewport(viewport, i);
+    results.push(result);
+    await onResult(result, viewport, i);
+    if (result.policyDenied) {
+      for (const skipped of viewports.slice(i + 1)) {
+        results.push({
+          viewport: skipped.name,
+          urlKind: 'not attempted',
+          boot: false,
+          consoleErrors: 0,
+          skipped: true,
+          error: `not attempted after policy/security denial on ${viewport.name}`,
+        });
+      }
+      break;
+    }
+  }
+  return results;
 }
 
 module.exports = {
@@ -272,6 +306,7 @@ module.exports = {
   createStaticHandler,
   policyDenialEvidence,
   runFileViewportWithFallback,
+  runViewportSequence,
   startHttpServer,
   stopHttpServer,
 };

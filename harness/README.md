@@ -9,7 +9,8 @@ Conformance tooling for FINAL-PLAN §1 acceptance criteria. Vanilla, zero build 
 | `grep-gate.sh` | Static determinism gate. FAILS (exit 1) if `Math.random()` / `Date.now()` / `performance.now()` appear as calls anywhere in `engine/`. |
 | `conformance.js` | Browser-side probes (loaded into the page by `run.js`): `engine.screenshot()`, 5×5 px averaging, disc-to-sky contrast, palette census, grain (patch variance), vignette (corner darkening + onset), halo profile, seeded determinism fixture, and a synthetic `selfTest()`. |
 | `run.js` | Node + Playwright orchestrator: boots `index.html` on desktop 1440×900 and mobile 390×844, counts console errors, waits for the tier auto-select log, runs the grep gate, the determinism smoke test (seed 7, two runs, ±1 luma), and prints a pass/fail report. |
-| `fallback.js` + `test-fallback.js` | Fail-closed file-navigation classification and offline/mocked checks for policy denials, eligible ordinary fallback, owned-server readiness, content identity, and bounded cleanup. |
+| `fallback.js` + `test-fallback.js` | Fail-closed file-navigation classification and offline/mocked checks for policy denials on both routes, viewport-stop behavior, eligible ordinary fallback, owned-server readiness, content identity, and bounded cleanup. |
+| `phase1-report.js` + `test-phase1-report.js` | Structured Phase 1 `PASS`/`FAIL`/`BLOCKED` report rows and no-probe reporting regressions. |
 | `replay-contract.js` + `test-replay-identity.js` | Offline checks that preserve the `cme-replay/3` `scene` string while `window.__cme.scene` remains the live `THREE.Scene`. |
 | `out/` | Screenshots from the last run (created on demand). |
 
@@ -61,6 +62,7 @@ Offline policy, server, and replay-identity regressions:
 
 ```sh
 node harness/test-fallback.js
+node harness/test-phase1-report.js
 node harness/test-replay-identity.js
 ```
 
