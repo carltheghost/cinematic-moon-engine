@@ -63,6 +63,7 @@ const zlib = require('node:zlib');
 const fs = require('node:fs');
 const path = require('node:path');
 const { launchBrowser, bootPage } = require('./boot');
+const { compareReplayScene, sceneIdForReplay } = require('./replay-contract');
 
 const RECORDS_DIR = path.join(__dirname, 'replay-records');
 
@@ -151,7 +152,8 @@ async function recordOne(browser, { seed, w, h, tier, reducedMotion, chapter, na
       tier: cme.tier, mode: cme.tierMode,
       reducedMotion: out.state.presentation.reducedMotion,
       dpr: window.devicePixelRatio,
-      scene: cme.scene,
+      sceneId: cme.sceneId,
+      sceneIsScene: !!cme.scene && cme.scene.isScene === true,
       simDuration: simDur,
       chapterCount: cme.sceneConfig.chapterCount,
       bakeResPin: cme.bakeResPin,
@@ -171,7 +173,9 @@ async function recordOne(browser, { seed, w, h, tier, reducedMotion, chapter, na
     // Phase 7: viewport identity = CSS dims + devicePixelRatio at boot
     // (GPT contract note 1 — see header).
     viewport: { w, h, dpr: r.dpr },
-    scene: r.scene,
+    // Keep cme-replay/3's serialized `scene` string field. The live
+    // THREE.Scene is cme.scene; its string identifier is cme.sceneId.
+    scene: sceneIdForReplay(r),
     chapterCount: r.chapterCount,
     simDuration: r.simDuration,
     // Phase 7: bake-resolution pin (critic-found defect — see header).
@@ -227,7 +231,8 @@ async function compareOne(browser, recPath) {
       tier: cme.tier, mode: cme.tierMode,
       reducedMotion: out.state.presentation.reducedMotion,
       dpr: window.devicePixelRatio,
-      scene: cme.scene,
+      sceneId: cme.sceneId,
+      sceneIsScene: !!cme.scene && cme.scene.isScene === true,
       bakeResolution: cme.bakeResolution,
     };
   })()`);
@@ -242,7 +247,8 @@ async function compareOne(browser, recPath) {
   if (r.reducedMotion !== record.reducedMotion) fails.push('reducedMotion flag drift');
   // Phase 7 (GPT note 1): viewport identity = CSS dims + DPR at boot.
   if (r.dpr !== dpr) fails.push(`devicePixelRatio ${r.dpr} != recorded ${dpr}`);
-  if (r.scene !== record.scene) fails.push(`scene ${r.scene} != recorded ${record.scene}`);
+  const sceneFailure = compareReplayScene(record.scene, r);
+  if (sceneFailure) fails.push(sceneFailure);
   // Phase 7 (bake pin): the bake resolution is replay identity — a fallback
   // flip changes pixels, so a mismatch fails loudly instead of masking.
   if (r.bakeResolution !== record.bakeRes) fails.push(`bakeResolution ${r.bakeResolution} != recorded ${record.bakeRes}`);

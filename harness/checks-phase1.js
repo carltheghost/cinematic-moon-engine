@@ -150,14 +150,16 @@ const GRADE_SRC = `async function () {
   // Phase 2: the real moon has crater TEXTURE, so a single-frame RMS measures
   // texture, not grain. Render TWO frames (different grain seeds via uFrame);
   // the texture cancels in the diff, leaving 2 independent grain realizations:
-  // grainRms = diffRms / sqrt(2).
+  // grainRms = diffRms / sqrt(2). Keep the camera at one scene time while
+  // varying only the post frame; renderFrame(t) also changes the camera pose.
+  cme.renderFrame(0);
   var f = cme.fixtureScreen();
   var dpr = cme.dpr || 1;
   cme.post.setMoonMask({ x: f.x / window.innerWidth, y: 1 - f.y / window.innerHeight },
                        f.rPx * dpr);
-  cme.renderFrame(12);
+  cme.post.render(12);
   var mA = cme.readPixels();
-  cme.renderFrame(13);
+  cme.post.render(13);
   var mB = cme.readPixels();
   cme.post.setMoonMask(null, 0);
   var MW = mA.width, MH = mA.height;
@@ -187,6 +189,9 @@ const GRADE_SRC = `async function () {
  * annulus max is reported (informational) for the Phase 2 profile. */
 const SKY_SRC = `function () {
   var cme = window.__cme;
+  if (!cme.scene || cme.scene.isScene !== true) {
+    return { pass: false, error: 'window.__cme.scene must remain the active THREE.Scene; use sceneId for the scene name' };
+  }
   cme.stars.points.visible = false;
   var px = cme.renderFrame(160);
   var f = cme.fixtureScreen();
@@ -213,8 +218,9 @@ const SKY_SRC = `function () {
     }
   }
   cme.stars.points.visible = true;
-  var fogIdentity = cme.scene.fog.color === cme.sky.horizonColor;
+  var fogIdentity = cme.scene.fog && cme.scene.fog.color === cme.sky.horizonColor;
   return {
+    sceneId: cme.sceneId,
     maxR: maxSky[0], maxG: maxSky[1], maxB: maxSky[2], samples: n,
     haloMax4812: maxHalo,
     ceiling: [22, 32, 47],

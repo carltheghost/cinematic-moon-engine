@@ -19,9 +19,9 @@
  * limit; never run concurrent Chromium instances from this harness).
  *
  * file:// first: Chromium blocks ESM over file:// unless
- * --allow-file-access-from-files is passed, so we launch with that flag. If
- * boot still fails on file://, we fall back to a loopback static server
- * (python3 -m http.server) and mark the result `httpFallback: true`.
+ * --allow-file-access-from-files is passed, so we launch with that flag.
+ * Only recognized unsupported-file-transport errors may use the owned
+ * loopback fallback. Explicit administrator/security denials stop the run.
  */
 'use strict';
 
@@ -29,6 +29,8 @@ const { spawn, spawnSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
 const path = require('node:path');
 const fs = require('node:fs');
+const { runFileViewportWithFallback, runViewportSequence, startHttpServer, stopHttpServer } = require('./fallback');
+const { buildPhase1ExitReport } = require('./phase1-report');
 
 const ROOT = path.resolve(__dirname, '..');
 const INDEX = path.join(ROOT, 'index.html');
@@ -76,28 +78,12 @@ async function ensureChromium(pw) {
   }
 }
 
-function startHttpServer() {
-  const port = 8931;
-  const proc = spawn('python3', ['-m', 'http.server', String(port), '--directory', ROOT],
-    { stdio: ['ignore', 'pipe', 'pipe'] });
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error('http.server did not start')), 8000);
-    proc.stderr.on('data', (d) => {
-      if (/Serving HTTP/.test(String(d))) { clearTimeout(timer); resolve({ proc, port }); }
-    });
-    proc.on('error', (e) => { clearTimeout(timer); reject(e); });
-    // stdout variant for some python versions
-    proc.stdout.on('data', (d) => {
-      if (/Serving HTTP/.test(String(d))) { clearTimeout(timer); resolve({ proc, port }); }
-    });
-  });
-}
-
 async function testViewport(pw, vp, url, viaFile) {
   const result = {
     viewport: vp.name, urlKind: viaFile ? 'file://' : 'http://127.0.0.1 (fallback)',
     boot: false, consoleErrors: -1, tierDecision: null, hudLines: 0,
     determinism: null, selfTest: null, screenshot: null, error: null,
+    navigationError: null, requestFailures: [],
   };
   const browser = await pw.chromium.launch({
     headless: true,
@@ -109,10 +95,24 @@ async function testViewport(pw, vp, url, viaFile) {
       isMobile: vp.isMobile, hasTouch: vp.hasTouch,
     });
     const consoleErrors = [];
+    const requestFailures = [];
     page.on('console', (m) => { if (m.type() === 'error') consoleErrors.push(m.text()); });
     page.on('pageerror', (e) => consoleErrors.push('PAGEERROR: ' + (e && e.message)));
+    page.on('requestfailed', (request) => {
+      const failure = request.failure();
+      requestFailures.push(`${request.url()}: ${(failure && failure.errorText) || 'request failed'}`);
+    });
 
-    await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    try {
+      await page.goto(url, { waitUntil: 'load', timeout: 30000 });
+    } catch (e) {
+      result.navigationError = String((e && e.message) || e).slice(0, 500);
+      result.error = 'navigation failed: ' + result.navigationError.slice(0, 180);
+      result.consoleErrors = consoleErrors.length;
+      result.consoleErrorText = consoleErrors.slice(0, 10);
+      result.requestFailures = requestFailures.slice(0, 10);
+      return result;
+    }
     try {
       await page.waitForFunction('window.__cmeBoot === true', null, { timeout: BOOT_TIMEOUT_MS });
       result.boot = true;
@@ -125,6 +125,7 @@ async function testViewport(pw, vp, url, viaFile) {
 
     result.consoleErrors = consoleErrors.length;
     result.consoleErrorText = consoleErrors.slice(0, 10);
+    result.requestFailures = requestFailures.slice(0, 10);
     result.tierDecision = await page.evaluate('window.__cmeTierDecision').catch(() => null);
     result.hudLines = await page.evaluate('(window.__cmeHudLog||[]).length').catch(() => 0);
     result.hudLog = await page.evaluate('(window.__cmeHudLog||[]).slice(-8)').catch(() => []);
@@ -185,83 +186,52 @@ async function main() {
 
   const fileUrl = pathToFileURL(INDEX).href + '?seed=7';
   let httpServer = null;
-  const results = [];
+  const getHttpServer = async () => {
+    if (!httpServer) httpServer = await startHttpServer();
+    return httpServer;
+  };
 
-  for (const vp of VIEWPORTS) {
-    console.log(`\n--- ${vp.name} (${vp.width}×${vp.height}) ---`);
-    let r = await testViewport(pw, vp, fileUrl, true);
-    if (!r.boot) {
-      console.log(`file:// boot failed (${r.error}); falling back to loopback http server…`);
-      if (!httpServer) httpServer = await startHttpServer();
-      const httpUrl = `http://127.0.0.1:${httpServer.port}/index.html?seed=7`;
-      r = await testViewport(pw, vp, httpUrl, false);
-      r.httpFallback = true;
-    }
-    results.push(r);
-    console.log(`boot: ${r.boot ? 'PASS' : 'FAIL'}  console errors: ${r.consoleErrors}`);
-    console.log(`tier decision: ${r.tierDecision ? 'LOGGED — ' + r.tierDecision : 'MISSING'}`);
-    console.log(`determinism(seed 7): ${r.determinism && r.determinism.pass ? 'PASS' : 'FAIL'} ` +
-      `(max luma Δ=${r.determinism && r.determinism.maxLumaDelta != null ? r.determinism.maxLumaDelta.toFixed(3) : 'n/a'})`);
-    console.log(`scene determinism: ${r.sceneDeterminism && r.sceneDeterminism.pass ? 'PASS' : 'FAIL'} ` +
-      `(max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta != null ? r.sceneDeterminism.maxLumaDelta.toFixed(3) : 'n/a'})`);
-    if (r.phase1) {
-      const p = r.phase1;
-      console.log(`bloom isolation: ${p.bloom && p.bloom.pass ? 'PASS' : 'FAIL'} ` +
-        `(outside/moon=${p.bloom && p.bloom.ratio != null ? (p.bloom.ratio * 100).toFixed(3) + '%' : 'n/a'})`);
-      console.log(`grade sampling: ${p.grade && p.grade.pass ? 'PASS' : 'FAIL'}`);
-      console.log(`sky ceiling: ${p.sky && p.sky.pass ? 'PASS' : 'FAIL'} ` +
-        `(max=${p.sky ? p.sky.maxR + ',' + p.sky.maxG + ',' + p.sky.maxB : 'n/a'} fogIdentity=${p.sky && p.sky.fogIdentity})`);
-      console.log(`perf: ${p.perf ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
-    }
-    console.log(`conformance selfTest: ${r.selfTest && r.selfTest.pass ? 'PASS' : 'FAIL'}`);
+  let results;
+  try {
+    results = await runViewportSequence(VIEWPORTS, async (vp) => {
+      console.log(`\n--- ${vp.name} (${vp.width}×${vp.height}) ---`);
+      return runFileViewportWithFallback({
+        pw, viewport: vp, fileUrl, testViewport, getHttpServer,
+      });
+    }, (r) => {
+      if (r.policyDenied) {
+        console.error(`STOP: explicit policy/security denial; no later navigation will be attempted: ${r.policyDenial}`);
+      } else if (r.httpFallback) {
+        console.log(`ordinary unsupported file loading (${r.fallbackReason}); used verified loopback fallback`);
+      } else if (!r.boot && r.fallbackAttempted === false) {
+        console.log(`no loopback fallback: ${r.fallbackSkippedReason || r.error || 'failure was not an approved file-transport limitation'}`);
+      }
+      console.log(`boot: ${r.boot ? 'PASS' : 'FAIL'}  console errors: ${r.consoleErrors}`);
+      console.log(`tier decision: ${r.tierDecision ? 'LOGGED — ' + r.tierDecision : 'MISSING'}`);
+      console.log(`determinism(seed 7): ${r.determinism && r.determinism.pass ? 'PASS' : 'FAIL'} ` +
+        `(max luma Δ=${r.determinism && r.determinism.maxLumaDelta != null ? r.determinism.maxLumaDelta.toFixed(3) : 'n/a'})`);
+      console.log(`scene determinism: ${r.sceneDeterminism && r.sceneDeterminism.pass ? 'PASS' : 'FAIL'} ` +
+        `(max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta != null ? r.sceneDeterminism.maxLumaDelta.toFixed(3) : 'n/a'})`);
+      if (r.phase1) {
+        const p = r.phase1;
+        console.log(`bloom isolation: ${p.bloom && p.bloom.pass ? 'PASS' : 'FAIL'} ` +
+          `(outside/moon=${p.bloom && p.bloom.ratio != null ? (p.bloom.ratio * 100).toFixed(3) + '%' : 'n/a'})`);
+        console.log(`grade sampling: ${p.grade && p.grade.pass ? 'PASS' : 'FAIL'}`);
+        console.log(`sky ceiling: ${p.sky && p.sky.pass ? 'PASS' : 'FAIL'} ` +
+          `(max=${p.sky ? p.sky.maxR + ',' + p.sky.maxG + ',' + p.sky.maxB : 'n/a'} fogIdentity=${p.sky && p.sky.fogIdentity})`);
+        console.log(`perf: ${p.perf && Number.isFinite(p.perf.msPerFrame) ? p.perf.msPerFrame.toFixed(2) + ' ms/frame' : 'n/a'} (proxy gate ≤33 ms)`);
+      }
+      console.log(`conformance selfTest: ${r.selfTest && r.selfTest.pass ? 'PASS' : 'FAIL'}`);
+    });
+  } finally {
+    await stopHttpServer(httpServer);
   }
-
-  if (httpServer) httpServer.proc.kill();
 
   // ---- report ----
   console.log('\n=== PHASE 1 EXIT REPORT ===');
-  const rows = [];
-  const add = (check, pass, detail) => rows.push({ check, pass: !!pass, detail });
-  for (const r of results) {
-    add(`(a) boot offline, zero console errors — ${r.viewport}`, r.boot && r.consoleErrors === 0,
-      `boot=${r.boot} errors=${r.consoleErrors} via=${r.urlKind}${r.httpFallback ? ' [FALLBACK]' : ''}` +
-      (r.consoleErrorText && r.consoleErrorText.length ? ` first: ${r.consoleErrorText[0]}` : ''));
-  }
-  for (const r of results) {
-    const p = r.phase1 || {};
-    const bl = p.bloom || {};
-    add(`(b) bloom isolation <2% — ${r.viewport}`, bl.pass,
-      bl.error || bl.skipped || `outside/moon=${(bl.ratio * 100).toFixed(3)}% (E_in=${bl.eIn.toFixed(1)} E_far=${bl.eFar.toFixed(3)})`);
-    const g = p.grade || {};
-    const gd = (name, s) => `${name}: ${s && s.pass ? 'PASS' : 'FAIL'}`;
-    add(`(c) grade sampling — ${r.viewport}`, g.pass,
-      g.error || ['black', 'midtoneGrain', 'vignette', 'moonGrain'].map((k) => {
-        const s = g[k] || {};
-        const v = k === 'black' ? `rms=${(s.rms || 0).toFixed(4)}`
-          : k === 'midtoneGrain' ? `rms=${(s.rms || 0).toFixed(3)}`
-          : k === 'vignette' ? `dark=${((s.cornerDarkening || 0) * 100).toFixed(1)}% onset=${(s.onset || 0).toFixed(3)}`
-          : `rms=${(s.rms || 0).toFixed(4)}`;
-        return `${gd(k, s)}(${v})`;
-      }).join(' '));
-    const sk = p.sky || {};
-    add(`(d) sky ≤ #16202F beyond halo, fog identity — ${r.viewport}`, sk.pass,
-      sk.error || `max=${sk.maxR},${sk.maxG},${sk.maxB} (ceiling 22,32,47) halo[4-8r]=${(sk.haloMax4812 || []).join(',')} fogIdentity=${sk.fogIdentity}`);
-    const pf = p.perf || {};
-    add(`(e) perf proxy ≤33 ms — ${r.viewport}`, pf.passProxy,
-      pf.error || `${pf.msPerFrame.toFixed(2)} ms/frame (tier=${pf.tier}, stars=${pf.stars}) — ${pf.note}`);
-    add(`(f) scene determinism (seed 7) — ${r.viewport}`, !!(r.sceneDeterminism && r.sceneDeterminism.pass),
-      r.sceneDeterminism && r.sceneDeterminism.error ? r.sceneDeterminism.error
-        : `frame=${r.sceneDeterminism && r.sceneDeterminism.frame} max luma Δ=${r.sceneDeterminism && r.sceneDeterminism.maxLumaDelta}`);
-  }
-  add('(g) grep gate', gate.pass, gate.output.split('\n')[0]);
-
-  let allPass = true;
-  for (const row of rows) {
-    console.log(`${row.pass ? 'PASS' : 'FAIL'}  ${row.check}\n      ${row.detail}`);
-    if (!row.pass) allPass = false;
-  }
-  console.log(allPass ? '\nALL CHECKS PASSED' : '\nSOME CHECKS FAILED');
-  process.exit(allPass ? 0 : 1);
+  const exitReport = buildPhase1ExitReport(results, gate);
+  console.log(exitReport.text);
+  process.exit(exitReport.allPass ? 0 : 1);
 }
 
 main().catch((e) => { console.error('harness fatal:', e); process.exit(2); });
