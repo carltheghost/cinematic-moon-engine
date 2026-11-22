@@ -256,7 +256,7 @@ async function testOwnedServerReadiness() {
     expectedIndex: expected,
     createServer: (requestHandler) => { handler = requestHandler; return owned; },
     readFile: (file, callback) => {
-      equal(file, path.join('/mock-checkout', 'index.html'), 'static response is rooted in the checkout');
+      equal(file, path.resolve('/mock-checkout', 'index.html'), 'static response is rooted in the checkout');
       setImmediate(() => callback(null, expected));
     },
     httpGet: probe.httpGet,
