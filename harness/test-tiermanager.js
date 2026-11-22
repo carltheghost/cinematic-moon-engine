@@ -6,9 +6,10 @@
  */
 'use strict';
 const path = require('node:path');
+const { pathToFileURL } = require('node:url');
 
 async function main() {
-  const tm = await import(path.join(__dirname, '..', 'engine', 'tiermanager.js'));
+  const tm = await import(pathToFileURL(path.join(__dirname, '..', 'engine', 'tiermanager.js')).href);
   const { resolveTier, selectTierFromWarmup, stepDown, createWatchdog, bloomProbeDecision } = tm;
   let pass = 0, fail = 0;
   const eq = (a, b, name) => {
