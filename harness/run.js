@@ -64,12 +64,13 @@ function runGrepGate() {
 function sleep(ms) { return new Promise((res) => setTimeout(res, ms)); }
 
 async function ensureChromium(pw) {
+  const executablePath = process.env.CME_CHROMIUM_EXECUTABLE;
   try {
-    const b = await pw.chromium.launch({ headless: true });
+    const b = await pw.chromium.launch({ headless: true, executablePath });
     await b.close();
     return;
   } catch (e) {
-    if (!/Executable doesn't exist/i.test(String(e && e.message))) throw e;
+    if (executablePath || !/Executable doesn't exist/i.test(String(e && e.message))) throw e;
     console.log('harness: installing Playwright Chromium…');
     await new Promise((resolve, reject) => {
       const p = spawn('npx', ['playwright', 'install', 'chromium'], { cwd: __dirname, stdio: 'inherit' });
@@ -87,6 +88,7 @@ async function testViewport(pw, vp, url, viaFile) {
   };
   const browser = await pw.chromium.launch({
     headless: true,
+    executablePath: process.env.CME_CHROMIUM_EXECUTABLE,
     args: ['--allow-file-access-from-files', '--no-sandbox', '--disable-dev-shm-usage'],
   });
   try {

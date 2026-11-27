@@ -30,6 +30,10 @@ node harness/run.js
 # exit 0 = all Phase 0 checks passed, exit 1 = a check failed, exit 2 = harness error
 ```
 
+Set `CME_CHROMIUM_EXECUTABLE` to the absolute path of an installed Chromium
+binary to run `harness/run.js` with that browser. An invalid explicit path
+reports an error instead of downloading a different browser.
+
 Just the static gate:
 
 ```sh
@@ -61,9 +65,7 @@ labelled as HTTP and is not evidence that file navigation was allowed.
 Offline policy, server, and replay-identity regressions:
 
 ```sh
-node harness/test-fallback.js
-node harness/test-phase1-report.js
-node harness/test-replay-identity.js
+npm --prefix harness test
 ```
 
 For a human double-clicking `index.html`: most Chromium builds need
