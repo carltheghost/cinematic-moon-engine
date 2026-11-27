@@ -4,7 +4,7 @@
   "description": "Conformance tooling for FINAL-PLAN §1 acceptance criteria. Vanilla, zero build step.",
   "main": "conformance.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "bash grep-gate.sh && node test-fallback.js && node test-phase1-report.js && node test-replay-identity.js && node test-tiermanager.js"
   },
   "keywords": [],
   "author": "",
